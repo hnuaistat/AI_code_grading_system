@@ -68,6 +68,12 @@ export default function LoginPage() {
         </form>
         <div style={styles.hint}>
           <p style={{color:'#94a3b8', fontSize:13}}>기본 계정: professor / secret</p>
+          <div style={{marginTop:12, borderTop:'1px solid #f1f5f9', paddingTop:12}}>
+            <span style={{color:'#94a3b8', fontSize:13}}>처음 사용하시나요? </span>
+            <a href="/register" style={{color:'#2563eb', fontSize:13, fontWeight:600, textDecoration:'none'}}>
+              회원가입
+            </a>
+          </div>
         </div>
       </div>
     </div>

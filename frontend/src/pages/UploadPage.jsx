@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
 import { useAuth } from '../App';
-import { gradingAPI } from '../services/api';
+import { gradingAPI, subjectAPI } from '../services/api';
 import StepIndicator from '../components/StepIndicator';
 
 const STEPS = ['파일 업로드', '채점 기준 설정', '채점 실행'];
@@ -29,14 +29,11 @@ function DropZone({ label, icon, accept, onDrop, file }) {
 }
 
 const dz = {
-  zone: {
-    border: '2px dashed', borderRadius: 12, padding: '28px 20px',
-    textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s'
-  },
+  zone: { border: '2px dashed', borderRadius: 12, padding: '28px 20px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' },
   icon: { fontSize: 32, marginBottom: 8 },
   label: { fontWeight: 600, color: '#374151', marginBottom: 4 },
   hint: { fontSize: 13, color: '#94a3b8' },
-  filename: { fontSize: 13, color: '#22c55e', fontWeight: 500, marginTop: 4 }
+  filename: { fontSize: 13, color: '#22c55e', fontWeight: 500, marginTop: 4 },
 };
 
 export default function UploadPage() {
@@ -46,8 +43,42 @@ export default function UploadPage() {
   const [criteriaFile, setCriteriaFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Subject state
+  const [subjects, setSubjects] = useState([]);
+  const [selectedSubjectId, setSelectedSubjectId] = useState('');
+  const [showNewSubject, setShowNewSubject] = useState(false);
+  const [newSubjectName, setNewSubjectName] = useState('');
+  const [newSubjectCode, setNewSubjectCode] = useState('');
+  const [subjectLoading, setSubjectLoading] = useState(false);
+
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    subjectAPI.list().then(res => {
+      setSubjects(res.data);
+      if (res.data.length > 0) setSelectedSubjectId(String(res.data[0].id));
+    }).catch(() => {});
+  }, []);
+
+  const handleCreateSubject = async () => {
+    if (!newSubjectName.trim()) return;
+    setSubjectLoading(true);
+    try {
+      const res = await subjectAPI.create(newSubjectName.trim(), newSubjectCode.trim() || null);
+      const created = res.data;
+      setSubjects(prev => [...prev, created]);
+      setSelectedSubjectId(String(created.id));
+      setShowNewSubject(false);
+      setNewSubjectName('');
+      setNewSubjectCode('');
+    } catch (err) {
+      setError(err.response?.data?.detail || '과목 생성에 실패했습니다');
+    } finally {
+      setSubjectLoading(false);
+    }
+  };
 
   const handleStart = async () => {
     if (!answerFile || !zipFile || !criteriaFile) {
@@ -61,6 +92,7 @@ export default function UploadPage() {
       fd.append('answer_notebook', answerFile);
       fd.append('student_zip', zipFile);
       fd.append('criteria_file', criteriaFile);
+      if (selectedSubjectId) fd.append('subject_id', selectedSubjectId);
       const res = await gradingAPI.startGrading(fd);
       navigate(`/dashboard/${res.data.session_id}`);
     } catch (err) {
@@ -71,15 +103,17 @@ export default function UploadPage() {
   };
 
   const allReady = answerFile && zipFile && criteriaFile;
+  const selectedSubject = subjects.find(s => String(s.id) === selectedSubjectId);
 
   return (
     <div style={s.page}>
       <header style={s.header}>
         <div style={s.headerLeft}>
-          <span style={{fontSize:24}}>📓</span>
+          <span style={{ fontSize: 24 }}>📓</span>
           <span style={s.headerTitle}>Jupyter 자동 채점 시스템</span>
         </div>
         <div style={s.headerRight}>
+          <button style={s.historyBtn} onClick={() => navigate('/history')}>📚 채점 기록</button>
           <span style={s.userName}>{user?.username} ({user?.role})</span>
           <button style={s.logoutBtn} onClick={logout}>로그아웃</button>
         </div>
@@ -88,39 +122,94 @@ export default function UploadPage() {
       <main style={s.main}>
         <StepIndicator steps={STEPS} current={step} />
 
+        {/* Subject selector */}
+        <div style={s.subjectCard}>
+          <div style={s.subjectRow}>
+            <div style={s.subjectLeft}>
+              <span style={s.subjectLabel}>📘 과목 선택</span>
+              {subjects.length > 0 ? (
+                <select
+                  style={s.select}
+                  value={selectedSubjectId}
+                  onChange={e => {
+                    if (e.target.value === '__new__') setShowNewSubject(true);
+                    else { setSelectedSubjectId(e.target.value); setShowNewSubject(false); }
+                  }}
+                >
+                  {subjects.map(sub => (
+                    <option key={sub.id} value={String(sub.id)}>
+                      {sub.code ? `[${sub.code}] ` : ''}{sub.name}
+                    </option>
+                  ))}
+                  <option value="__new__">+ 새 과목 만들기</option>
+                </select>
+              ) : (
+                <span style={{ fontSize: 13, color: '#94a3b8' }}>과목이 없습니다</span>
+              )}
+              {!showNewSubject && (
+                <button style={s.newSubjectBtn} onClick={() => setShowNewSubject(true)}>
+                  + 새 과목
+                </button>
+              )}
+            </div>
+            {selectedSubject && !showNewSubject && (
+              <div style={s.subjectInfo}>
+                <span style={s.subjectInfoName}>{selectedSubject.name}</span>
+                {selectedSubject.code && <span style={s.subjectInfoCode}>{selectedSubject.code}</span>}
+                <span style={s.subjectInfoCount}>채점 {selectedSubject.session_count}회</span>
+              </div>
+            )}
+          </div>
+
+          {showNewSubject && (
+            <div style={s.newSubjectForm}>
+              <input
+                style={s.input}
+                placeholder="과목명 (예: 알고리즘)"
+                value={newSubjectName}
+                onChange={e => setNewSubjectName(e.target.value)}
+              />
+              <input
+                style={s.input}
+                placeholder="과목코드 (선택, 예: CS101)"
+                value={newSubjectCode}
+                onChange={e => setNewSubjectCode(e.target.value)}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  style={s.createBtn}
+                  onClick={handleCreateSubject}
+                  disabled={subjectLoading || !newSubjectName.trim()}
+                >
+                  {subjectLoading ? '생성 중...' : '생성'}
+                </button>
+                <button style={s.cancelBtn} onClick={() => { setShowNewSubject(false); setNewSubjectName(''); setNewSubjectCode(''); }}>
+                  취소
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         <div style={s.card}>
           <h2 style={s.cardTitle}>파일 업로드</h2>
           <p style={s.cardDesc}>채점에 필요한 파일을 모두 업로드해주세요</p>
 
           <div style={s.grid}>
-            <DropZone
-              label="정답 노트북"
-              icon="📝"
-              accept={{ 'application/x-ipynb+json': ['.ipynb'] }}
-              onDrop={([f]) => setAnswerFile(f)}
-              file={answerFile}
-            />
-            <DropZone
-              label="학생 제출물 (ZIP)"
-              icon="📦"
+            <DropZone label="정답 노트북" icon="📝" accept={{ 'application/x-ipynb+json': ['.ipynb'] }}
+              onDrop={([f]) => setAnswerFile(f)} file={answerFile} />
+            <DropZone label="학생 제출물 (ZIP)" icon="📦"
               accept={{ 'application/zip': ['.zip'], 'application/x-zip-compressed': ['.zip'] }}
-              onDrop={([f]) => setZipFile(f)}
-              file={zipFile}
-            />
-            <DropZone
-              label="채점 기준 (JSON)"
-              icon="📋"
-              accept={{ 'application/json': ['.json'] }}
-              onDrop={([f]) => setCriteriaFile(f)}
-              file={criteriaFile}
-            />
+              onDrop={([f]) => setZipFile(f)} file={zipFile} />
+            <DropZone label="채점 기준 (JSON)" icon="📋" accept={{ 'application/json': ['.json'] }}
+              onDrop={([f]) => setCriteriaFile(f)} file={criteriaFile} />
           </div>
 
           {error && <div style={s.error}>{error}</div>}
 
           <div style={s.actions}>
             <button
-              style={allReady && !loading ? s.primaryBtn : {...s.primaryBtn, opacity:0.5, cursor:'not-allowed'}}
+              style={allReady && !loading ? s.primaryBtn : { ...s.primaryBtn, opacity: 0.5, cursor: 'not-allowed' }}
               onClick={handleStart}
               disabled={!allReady || loading}
             >
@@ -152,28 +241,46 @@ const s = {
   header: {
     background: '#fff', borderBottom: '1px solid #e2e8f0',
     padding: '0 32px', height: 64, display: 'flex',
-    alignItems: 'center', justifyContent: 'space-between'
+    alignItems: 'center', justifyContent: 'space-between',
   },
   headerLeft: { display: 'flex', alignItems: 'center', gap: 10 },
   headerTitle: { fontSize: 18, fontWeight: 700, color: '#1e293b' },
-  headerRight: { display: 'flex', alignItems: 'center', gap: 16 },
-  userName: { fontSize: 14, color: '#64748b' },
-  logoutBtn: {
-    background: 'none', border: '1px solid #e2e8f0', borderRadius: 6,
-    padding: '6px 14px', cursor: 'pointer', fontSize: 14, color: '#64748b'
+  headerRight: { display: 'flex', alignItems: 'center', gap: 12 },
+  historyBtn: {
+    background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6,
+    padding: '6px 14px', cursor: 'pointer', fontSize: 14, color: '#374151', fontWeight: 500,
   },
+  userName: { fontSize: 14, color: '#64748b' },
+  logoutBtn: { background: 'none', border: '1px solid #e2e8f0', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 14, color: '#64748b' },
   main: { maxWidth: 900, margin: '0 auto', padding: '32px 24px' },
+
+  subjectCard: {
+    background: '#fff', borderRadius: 12, padding: '18px 24px',
+    marginBottom: 20, boxShadow: '0 1px 6px rgba(0,0,0,0.06)',
+    border: '1px solid #e2e8f0',
+  },
+  subjectRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 },
+  subjectLeft: { display: 'flex', alignItems: 'center', gap: 12 },
+  subjectLabel: { fontSize: 14, fontWeight: 700, color: '#1e293b', whiteSpace: 'nowrap' },
+  select: { padding: '7px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none', background: '#fff', cursor: 'pointer' },
+  newSubjectBtn: { background: 'none', border: '1px solid #2563eb', color: '#2563eb', borderRadius: 6, padding: '5px 12px', fontSize: 13, cursor: 'pointer', fontWeight: 500 },
+  subjectInfo: { display: 'flex', alignItems: 'center', gap: 8 },
+  subjectInfoName: { fontSize: 14, fontWeight: 600, color: '#1e293b' },
+  subjectInfoCode: { fontSize: 12, background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '2px 8px', fontWeight: 600 },
+  subjectInfoCount: { fontSize: 12, color: '#94a3b8' },
+  newSubjectForm: { marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
+  input: { padding: '8px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none' },
+  createBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer' },
+  cancelBtn: { background: 'none', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', fontSize: 14, cursor: 'pointer', color: '#64748b' },
+
   card: { background: '#fff', borderRadius: 16, padding: 32, boxShadow: '0 1px 8px rgba(0,0,0,0.07)' },
   cardTitle: { fontSize: 20, fontWeight: 700, color: '#1e293b', marginBottom: 8 },
   cardDesc: { color: '#64748b', marginBottom: 24 },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 },
   error: { background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', borderRadius: 8, padding: '12px 16px', marginBottom: 16 },
   actions: { display: 'flex', justifyContent: 'flex-end', marginBottom: 32 },
-  primaryBtn: {
-    background: '#2563eb', color: '#fff', border: 'none',
-    borderRadius: 10, padding: '13px 32px', fontSize: 16, fontWeight: 600, cursor: 'pointer'
-  },
+  primaryBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 10, padding: '13px 32px', fontSize: 16, fontWeight: 600, cursor: 'pointer' },
   formatHint: { background: '#f8fafc', borderRadius: 10, padding: 20, border: '1px solid #e2e8f0' },
   hintTitle: { fontSize: 14, fontWeight: 600, color: '#374151', marginBottom: 12 },
-  pre: { fontSize: 12, color: '#374151', overflowX: 'auto', lineHeight: 1.6 }
+  pre: { fontSize: 12, color: '#374151', overflowX: 'auto', lineHeight: 1.6 },
 };

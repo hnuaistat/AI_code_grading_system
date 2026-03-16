@@ -1,8 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
 import UploadPage from './pages/UploadPage';
 import DashboardPage from './pages/DashboardPage';
+import HistoryPage from './pages/HistoryPage';
 import { authAPI } from './services/api';
 
 export const AuthContext = createContext(null);
@@ -40,7 +42,7 @@ export default function App() {
   };
 
   if (loading) return (
-    <div style={{ display:'flex', justifyContent:'center', alignItems:'center', height:'100vh', fontSize:18, color:'#64748b' }}>
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', fontSize: 18, color: '#64748b' }}>
       로딩 중...
     </div>
   );
@@ -50,7 +52,9 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
           <Route path="/upload" element={<PrivateRoute><UploadPage /></PrivateRoute>} />
+          <Route path="/history" element={<PrivateRoute><HistoryPage /></PrivateRoute>} />
           <Route path="/dashboard/:sessionId" element={<PrivateRoute><DashboardPage /></PrivateRoute>} />
           <Route path="*" element={<Navigate to={user ? "/upload" : "/login"} replace />} />
         </Routes>

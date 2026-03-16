@@ -16,6 +16,37 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RegisterRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+
+
+class SubjectCreate(BaseModel):
+    name: str
+    code: Optional[str] = None
+
+
+class SubjectResponse(BaseModel):
+    id: int
+    name: str
+    code: Optional[str] = None
+    session_count: int = 0
+    created_at: str
+
+
+class HistorySessionItem(BaseModel):
+    session_id: str
+    subject_id: Optional[int] = None
+    subject_name: Optional[str] = None
+    subject_code: Optional[str] = None
+    status: str
+    total_students: int
+    processed_students: int
+    created_at: str
+    completed_at: Optional[str] = None
+
+
 class PartialScoreCriterion(BaseModel):
     item: str
     score: float

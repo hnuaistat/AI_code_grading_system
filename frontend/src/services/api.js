@@ -21,7 +21,13 @@ API.interceptors.response.use(
 
 export const authAPI = {
   login: (username, password) => API.post('/auth/login', { username, password }),
+  register: (username, email, password) => API.post('/auth/register', { username, email, password }),
   me: () => API.get('/auth/me'),
+};
+
+export const subjectAPI = {
+  list: () => API.get('/subjects'),
+  create: (name, code) => API.post('/subjects', { name, code }),
 };
 
 export const gradingAPI = {
@@ -31,6 +37,7 @@ export const gradingAPI = {
   getSession: (sessionId) => API.get(`/grading/session/${sessionId}`),
   getResults: (sessionId) => API.get(`/grading/session/${sessionId}/results`),
   downloadExcel: (sessionId) => API.get(`/grading/session/${sessionId}/download`, { responseType: 'blob' }),
+  getHistory: () => API.get('/grading/history'),
 };
 
 export default API;
