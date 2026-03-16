@@ -4,6 +4,7 @@ import { useAuth } from '../App';
 import { gradingAPI } from '../services/api';
 import ResultTable from '../components/ResultTable';
 import StudentDetailModal from '../components/StudentDetailModal';
+import StatsDashboard from '../components/StatsDashboard';
 
 export default function DashboardPage() {
   const { sessionId } = useParams();
@@ -11,6 +12,7 @@ export default function DashboardPage() {
   const navigate = useNavigate();
   const [session, setSession] = useState(null);
   const [selectedStudent, setSelectedStudent] = useState(null);
+  const [showStats, setShowStats] = useState(false);
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -108,6 +110,9 @@ export default function DashboardPage() {
               unit={`/ ${maxTotal}`}
               color="#dc2626"
             />
+            <button style={s.statsBtn} onClick={() => setShowStats(true)}>
+              📊 통계 대시보드
+            </button>
           </div>
         )}
 
@@ -144,6 +149,13 @@ export default function DashboardPage() {
         <StudentDetailModal
           student={selectedStudent}
           onClose={() => setSelectedStudent(null)}
+        />
+      )}
+
+      {showStats && (
+        <StatsDashboard
+          results={session.results}
+          onClose={() => setShowStats(false)}
         />
       )}
     </div>
@@ -187,7 +199,12 @@ const s = {
   progressPct: { fontSize:14, fontWeight:700, color:'#2563eb' },
   progressBar: { height:10, background:'#e2e8f0', borderRadius:99, overflow:'hidden' },
   progressFill: { height:'100%', background:'linear-gradient(90deg,#2563eb,#60a5fa)', borderRadius:99, transition:'width 0.5s ease' },
-  statsRow: { display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16, marginBottom:24 },
+  statsRow: { display:'grid', gridTemplateColumns:'repeat(4,1fr) auto', gap:16, marginBottom:24, alignItems:'stretch' },
+  statsBtn: {
+    background:'#7c3aed', color:'#fff', border:'none', borderRadius:12,
+    padding:'0 20px', fontSize:14, fontWeight:600, cursor:'pointer',
+    whiteSpace:'nowrap', boxShadow:'0 1px 6px rgba(124,58,237,0.3)'
+  },
   error: { background:'#fef2f2', border:'1px solid #fecaca', color:'#dc2626', borderRadius:8, padding:'12px 16px', marginBottom:16 },
   tableCard: { background:'#fff', borderRadius:16, padding:28, boxShadow:'0 1px 8px rgba(0,0,0,0.07)' },
   tableHeader: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 },
