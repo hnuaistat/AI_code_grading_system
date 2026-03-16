@@ -3,7 +3,7 @@ import json
 from typing import List, Dict, Any, Optional, Tuple
 from schemas import (
     GradingCriteria, Problem, StudentResult, ProblemResult,
-    PartialScoreResult
+    PartialScoreResult, NotebookCell, NotebookCellOutput
 )
 from services.notebook_service import (
     extract_cell_outputs, extract_code_cells, parse_notebook,
@@ -138,6 +138,24 @@ async def grade_student_notebook(
 
         output_match, similarity = compare_outputs(ans_outputs_flat, stu_outputs_flat)
 
+        # Build notebook cells for display
+        nb_cells = []
+        for c in stu_cells:
+            cell_outputs = []
+            for o in c.get('outputs', []):
+                text = ""
+                if o.get('output_type') == 'stream':
+                    t = o.get('text', '')
+                    text = ''.join(t) if isinstance(t, list) else t
+                elif o.get('output_type') in ('execute_result', 'display_data'):
+                    t = o.get('data', {}).get('text/plain', '')
+                    text = ''.join(t) if isinstance(t, list) else t
+                if text.strip():
+                    cell_outputs.append(NotebookCellOutput(
+                        output_type=o.get('output_type', ''), text=text.strip()
+                    ))
+            nb_cells.append(NotebookCell(source=c['source'], outputs=cell_outputs))  # type: ignore
+
         # AI grading
         ai_partial_scores = []
         ai_overall = ""
@@ -182,7 +200,8 @@ async def grade_student_notebook(
             obtained_score=min(obtained, problem.full_score),
             output_match=output_match,
             partial_scores=ai_partial_scores,
-            ai_feedback=ai_overall
+            ai_feedback=ai_overall,
+            code_cells=nb_cells
         ))
 
     return problem_results, execution_error
