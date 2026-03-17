@@ -68,14 +68,14 @@ export default function ResultTable({ results, onSelectStudent }) {
                       <td key={pid} style={{ ...td, textAlign: 'center' }}>
                         {p ? (
                           <span style={{ color: p.obtained_score === p.full_score ? '#059669' : '#d97706', fontWeight: 600 }}>
-                            {p.obtained_score}<span style={{ color: '#94a3b8', fontWeight: 400 }}>/{p.full_score}</span>
+                            {p.obtained_score.toFixed(2)}<span style={{ color: '#94a3b8', fontWeight: 400 }}>/{p.full_score}</span>
                           </span>
                         ) : <span style={{ color: '#e2e8f0' }}>-</span>}
                       </td>
                     );
                   })}
                   <td style={{ ...td, textAlign: 'center', fontWeight: 700, fontSize: 16, color: '#1e293b' }}>
-                    {student.total_score}
+                    {student.total_score.toFixed(2)}
                     <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 400 }}>/{student.max_total_score}</span>
                   </td>
                   <td style={{ ...td, textAlign: 'center' }}>

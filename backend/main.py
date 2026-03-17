@@ -89,6 +89,7 @@ def seed_database():
 
 @app.on_event("startup")
 async def startup():
+    models.Base.metadata.drop_all(bind=engine)
     models.Base.metadata.create_all(bind=engine)
     seed_database()
 

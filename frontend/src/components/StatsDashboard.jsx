@@ -13,12 +13,12 @@ function computeStats(scores) {
   const avg = s.reduce((a, b) => a + b, 0) / n;
   const std = Math.sqrt(s.reduce((a, b) => a + (b - avg) ** 2, 0) / n);
   return {
-    min: s[0], max: s[n - 1],
-    q1: s[Math.floor(n * 0.25)],
-    median: s[Math.floor(n * 0.5)],
-    q3: s[Math.floor(n * 0.75)],
-    avg: parseFloat(avg.toFixed(1)),
-    std: parseFloat(std.toFixed(1)),
+    min: parseFloat(s[0].toFixed(2)), max: parseFloat(s[n - 1].toFixed(2)),
+    q1: parseFloat(s[Math.floor(n * 0.25)].toFixed(2)),
+    median: parseFloat(s[Math.floor(n * 0.5)].toFixed(2)),
+    q3: parseFloat(s[Math.floor(n * 0.75)].toFixed(2)),
+    avg: parseFloat(avg.toFixed(2)),
+    std: parseFloat(std.toFixed(2)),
   };
 }
 
@@ -93,8 +93,8 @@ export default function StatsDashboard({ results, onClose }) {
       const rows = results.map(r => r.problems.find(p => p.problem_id === pid)).filter(Boolean);
       const full = rows[0]?.full_score || 0;
       const avg = rows.reduce((s, p) => s + p.obtained_score, 0) / (rows.length || 1);
-      const pct = full > 0 ? parseFloat((avg / full * 100).toFixed(1)) : 0;
-      return { name: `문제 ${pid}`, avg: parseFloat(avg.toFixed(1)), full, miss: parseFloat((full - avg).toFixed(1)), pct };
+      const pct = full > 0 ? parseFloat((avg / full * 100).toFixed(2)) : 0;
+      return { name: `문제 ${pid}`, avg: parseFloat(avg.toFixed(2)), full, miss: parseFloat((full - avg).toFixed(2)), pct };
     });
 
     /* Most missed criteria */
@@ -108,7 +108,7 @@ export default function StatsDashboard({ results, onClose }) {
       .map(([item, v]) => ({
         item: item.length > 10 ? item.slice(0, 10) + '…' : item,
         fullItem: item,
-        rate: v.max > 0 ? parseFloat((v.obtained / v.max * 100).toFixed(1)) : 0,
+        rate: v.max > 0 ? parseFloat((v.obtained / v.max * 100).toFixed(2)) : 0,
       }))
       .sort((a, b) => a.rate - b.rate)
       .slice(0, 8);
@@ -154,10 +154,10 @@ export default function StatsDashboard({ results, onClose }) {
           {/* Summary cards */}
           <div style={s.summaryRow}>
             {[
-              { label: '평균 점수', value: `${data.stats.avg}`, unit: `/ ${data.maxScore}`, color: '#2563eb' },
-              { label: '중앙값', value: `${data.stats.median}`, unit: `/ ${data.maxScore}`, color: '#059669' },
-              { label: '표준편차', value: `${data.stats.std}`, unit: 'pts', color: '#d97706' },
-              { label: '최고 / 최저', value: `${data.stats.max} / ${data.stats.min}`, unit: '', color: '#7c3aed' },
+              { label: '평균 점수', value: `${data.stats.avg.toFixed(2)}`, unit: `/ ${data.maxScore}`, color: '#2563eb' },
+              { label: '중앙값', value: `${data.stats.median.toFixed(2)}`, unit: `/ ${data.maxScore}`, color: '#059669' },
+              { label: '표준편차', value: `${data.stats.std.toFixed(2)}`, unit: 'pts', color: '#d97706' },
+              { label: '최고 / 최저', value: `${data.stats.max.toFixed(2)} / ${data.stats.min.toFixed(2)}`, unit: '', color: '#7c3aed' },
             ].map((c, i) => (
               <div key={i} style={{ ...s.summaryCard, borderTop: `4px solid ${c.color}` }}>
                 <div style={s.summaryVal}>{c.value} <span style={s.summaryUnit}>{c.unit}</span></div>

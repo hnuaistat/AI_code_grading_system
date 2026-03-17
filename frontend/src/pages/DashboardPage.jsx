@@ -97,16 +97,16 @@ export default function DashboardPage() {
         {isDone && (
           <div style={s.statsRow}>
             <StatCard label="총 학생 수" value={session.results.length} unit="명" color="#2563eb" />
-            <StatCard label="평균 점수" value={avgScore.toFixed(1)} unit={`/ ${maxTotal}`} color="#059669" />
+            <StatCard label="평균 점수" value={avgScore.toFixed(2)} unit={`/ ${maxTotal}`} color="#059669" />
             <StatCard
               label="최고 점수"
-              value={session.results.length > 0 ? Math.max(...session.results.map(r => r.total_score)) : 0}
+              value={session.results.length > 0 ? Math.max(...session.results.map(r => r.total_score)).toFixed(2) : 0}
               unit={`/ ${maxTotal}`}
               color="#d97706"
             />
             <StatCard
               label="최저 점수"
-              value={session.results.length > 0 ? Math.min(...session.results.map(r => r.total_score)) : 0}
+              value={session.results.length > 0 ? Math.min(...session.results.map(r => r.total_score)).toFixed(2) : 0}
               unit={`/ ${maxTotal}`}
               color="#dc2626"
             />

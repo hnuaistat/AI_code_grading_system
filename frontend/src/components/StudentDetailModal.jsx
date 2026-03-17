@@ -60,7 +60,7 @@ function FeedbackPanel({ student }) {
       <div style={fb.panelHeader}>
         <span style={fb.panelTitle}>🤖 AI 채점 결과</span>
         <div style={fb.scoreBox}>
-          <span style={fb.scoreNum}>{student.total_score}</span>
+          <span style={fb.scoreNum}>{student.total_score.toFixed(2)}</span>
           <span style={fb.scoreDen}>/{student.max_total_score}</span>
           <span style={fb.scorePct}>{ratio}%</span>
         </div>
@@ -82,7 +82,7 @@ function FeedbackPanel({ student }) {
               <div style={fb.problemHeader}>
                 <span style={fb.problemTitle}>문제 {problem.problem_id}</span>
                 <span style={{ ...fb.problemScore, color: barColor }}>
-                  {problem.obtained_score} / {problem.full_score}점
+                  {problem.obtained_score.toFixed(2)} / {problem.full_score}점
                 </span>
               </div>
               <div style={fb.progressBar}>
@@ -98,7 +98,7 @@ function FeedbackPanel({ student }) {
                       <div style={fb.criterionTop}>
                         <span style={fb.criterionItem}>{ps.item}</span>
                         <span style={{ ...fb.criterionScore, color: scoreColor }}>
-                          {ps.score} / {ps.max_score}점
+                          {ps.score.toFixed(2)} / {ps.max_score}점
                         </span>
                       </div>
                       {ps.reason && <p style={fb.reason}>{ps.reason}</p>}

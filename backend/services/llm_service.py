@@ -1,12 +1,12 @@
 import os
 import json
-from typing import List, Dict, Any, Optional
+import hashlib
+from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
 from schemas import PartialScoreCriterion
 
 
 def get_openai_client() -> AsyncOpenAI:
-    provider = os.getenv("LLM_PROVIDER", "openai").lower()
     api_key = os.getenv("OPENAI_API_KEY", "")
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
@@ -16,16 +16,80 @@ def get_openai_client() -> AsyncOpenAI:
     )
 
 
+def _mock_grade(student_code: str, answer_code: str, criteria, problem_id: int):
+    """
+    TEST_MODE용 모의 채점.
+    학생 코드와 정답 코드의 유사도를 비교하여 점수를 산출합니다.
+    """
+    results = []
+    # 학생 코드의 키워드 기반 유사도 계산
+    answer_tokens = set(answer_code.split())
+    student_tokens = set(student_code.split()) if student_code.strip() else set()
+
+    if not student_tokens:
+        similarity = 0.0
+    else:
+        overlap = answer_tokens & student_tokens
+        similarity = len(overlap) / max(len(answer_tokens), 1)
+
+    # 코드 해시로 학생마다 약간 다른 점수 부여
+    code_hash = int(hashlib.md5(student_code.encode()).hexdigest()[:8], 16)
+    variation = (code_hash % 20 - 10) / 100.0  # -0.10 ~ +0.10
+
+    for c in criteria:
+        if not student_code.strip():
+            results.append({
+                "item": c.item,
+                "max_score": c.score,
+                "score": 0,
+                "reason": "코드가 제출되지 않았습니다."
+            })
+            continue
+
+        # 유사도 기반 점수 (60~100% 범위)
+        base_ratio = min(max(similarity + variation, 0.3), 1.0)
+        score = round(c.score * base_ratio, 2)  # 소수점 2자리까지 계산
+        score = round(min(score, c.score), 2)   # 최종 반올림
+
+        # 유사도에 따른 피드백 생성
+        if base_ratio >= 0.85:
+            feedback = f"[문제 {problem_id}] 정답과 매우 유사한 풀이입니다. {c.item} 항목을 잘 구현했습니다."
+        elif base_ratio >= 0.6:
+            feedback = f"[문제 {problem_id}] 기본적인 구현은 되어 있으나, {c.item} 항목에서 일부 개선이 필요합니다."
+        else:
+            feedback = f"[문제 {problem_id}] {c.item} 항목의 핵심 개념이 부족합니다. 정답 코드를 참고하여 학습하세요."
+
+        results.append({
+            "item": c.item,
+            "max_score": c.score,
+            "score": score,
+            "reason": feedback
+        })
+
+    total = sum(r["score"] for r in results)
+    max_total = sum(r["max_score"] for r in results)
+    overall = f"[모의 채점] 문제 {problem_id}: {total:.1f}/{max_total}점. 코드 유사도 {similarity:.0%} 기반 평가입니다."
+    return results, overall
+
+
 async def grade_with_ai(
     student_code: str,
     answer_code: str,
     criteria: List[PartialScoreCriterion],
     problem_id: int
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], str]:
     """
-    GPT-4o로 학생 코드를 분석하여 채점 기준별 점수 및 피드백 반환.
-    반환: [{"item": str, "max_score": float, "score": float, "reason": str}, ...]
+    AI로 학생 코드를 채점합니다.
+    - TEST_MODE=true: 코드 유사도 기반 모의 채점 (API 키 불필요)
+    - TEST_MODE=false: OpenAI GPT-4o 실제 채점
     """
+    # ── TEST_MODE 확인 ──
+    test_mode = os.getenv("TEST_MODE", "false").lower() == "true"
+    if test_mode:
+        print(f"  [TEST_MODE] 문제 {problem_id} 모의 채점 중... (학생 코드 {len(student_code)}자)")
+        return _mock_grade(student_code, answer_code, criteria, problem_id)
+
+    # ── 실제 OpenAI 호출 ──
     client = get_openai_client()
 
     criteria_text = "\n".join([
@@ -41,12 +105,12 @@ async def grade_with_ai(
 
 ## 정답 코드
 ```python
-{answer_code[:3000]}
+{answer_code[:2000]}
 ```
 
 ## 학생 코드
 ```python
-{student_code[:3000]}
+{student_code[:2000]}
 ```
 
 ## 채점 기준
@@ -108,7 +172,6 @@ async def grade_with_ai(
 
         return graded, overall
     except Exception as e:
-        # Fallback: return 0 scores with error message
         return [
             {
                 "item": c.item,
