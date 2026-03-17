@@ -47,10 +47,14 @@ export default function UploadPage() {
   // Subject state
   const [subjects, setSubjects] = useState([]);
   const [selectedSubjectId, setSelectedSubjectId] = useState('');
+  const [selectedItemId, setSelectedItemId] = useState('');
   const [showNewSubject, setShowNewSubject] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState('');
   const [newSubjectCode, setNewSubjectCode] = useState('');
   const [subjectLoading, setSubjectLoading] = useState(false);
+  const [showNewItem, setShowNewItem] = useState(false);
+  const [newItemName, setNewItemName] = useState('');
+  const [itemLoading, setItemLoading] = useState(false);
 
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -70,6 +74,7 @@ export default function UploadPage() {
       const created = res.data;
       setSubjects(prev => [...prev, created]);
       setSelectedSubjectId(String(created.id));
+      setSelectedItemId('');
       setShowNewSubject(false);
       setNewSubjectName('');
       setNewSubjectCode('');
@@ -77,6 +82,41 @@ export default function UploadPage() {
       setError(err.response?.data?.detail || '과목 생성에 실패했습니다');
     } finally {
       setSubjectLoading(false);
+    }
+  };
+
+  const handleCreateItem = async () => {
+    if (!newItemName.trim() || !selectedSubjectId) return;
+    setItemLoading(true);
+    try {
+      const res = await subjectAPI.createItem(selectedSubjectId, newItemName.trim());
+      setSubjects(prev => prev.map(s =>
+        s.id === parseInt(selectedSubjectId)
+          ? { ...s, items: [...(s.items || []), res.data] }
+          : s
+      ));
+      setSelectedItemId(String(res.data.id));
+      setShowNewItem(false);
+      setNewItemName('');
+    } catch (err) {
+      setError(err.response?.data?.detail || '항목 생성에 실패했습니다');
+    } finally {
+      setItemLoading(false);
+    }
+  };
+
+  const handleDeleteItem = async (itemId) => {
+    if (!selectedSubjectId) return;
+    try {
+      await subjectAPI.deleteItem(selectedSubjectId, itemId);
+      setSubjects(prev => prev.map(s =>
+        s.id === parseInt(selectedSubjectId)
+          ? { ...s, items: s.items.filter(item => item.id !== itemId) }
+          : s
+      ));
+      if (selectedItemId === String(itemId)) setSelectedItemId('');
+    } catch (err) {
+      setError(err.response?.data?.detail || '항목 삭제에 실패했습니다');
     }
   };
 
@@ -93,6 +133,7 @@ export default function UploadPage() {
       fd.append('student_zip', zipFile);
       fd.append('criteria_file', criteriaFile);
       if (selectedSubjectId) fd.append('subject_id', selectedSubjectId);
+      if (selectedItemId) fd.append('subject_item_id', selectedItemId);
       const res = await gradingAPI.startGrading(fd);
       navigate(`/dashboard/${res.data.session_id}`);
     } catch (err) {
@@ -191,6 +232,72 @@ export default function UploadPage() {
           )}
         </div>
 
+        {/* Subject Items */}
+        {selectedSubjectId && subjects.find(s => String(s.id) === selectedSubjectId)?.items && (
+          <div style={s.itemsCard}>
+            <div style={s.itemsHeader}>
+              <span style={s.itemsLabel}>📋 세부 항목 (과제, 중간고사, 기말고사 등)</span>
+              {!showNewItem && (
+                <button style={s.addItemBtn} onClick={() => setShowNewItem(true)}>
+                  + 항목 추가
+                </button>
+              )}
+            </div>
+
+            {showNewItem && (
+              <div style={s.newItemForm}>
+                <input
+                  style={s.input}
+                  placeholder="항목명 (예: 중간고사)"
+                  value={newItemName}
+                  onChange={e => setNewItemName(e.target.value)}
+                />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    style={s.createBtn}
+                    onClick={handleCreateItem}
+                    disabled={itemLoading || !newItemName.trim()}
+                  >
+                    {itemLoading ? '추가 중...' : '추가'}
+                  </button>
+                  <button style={s.cancelBtn} onClick={() => { setShowNewItem(false); setNewItemName(''); }}>
+                    취소
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {subjects.find(s => String(s.id) === selectedSubjectId)?.items.length > 0 ? (
+              <div style={s.itemsGrid}>
+                {subjects.find(s => String(s.id) === selectedSubjectId).items.map(item => (
+                  <div
+                    key={item.id}
+                    style={{
+                      ...s.itemCard,
+                      borderColor: selectedItemId === String(item.id) ? '#2563eb' : '#e2e8f0',
+                      background: selectedItemId === String(item.id) ? '#eff6ff' : '#fff',
+                    }}
+                    onClick={() => setSelectedItemId(String(item.id))}
+                  >
+                    <div style={s.itemName}>{item.name}</div>
+                    <button
+                      style={s.itemDeleteBtn}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteItem(item.id);
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              !showNewItem && <div style={s.empty}>항목이 없습니다</div>
+            )}
+          </div>
+        )}
+
         <div style={s.card}>
           <h2 style={s.cardTitle}>파일 업로드</h2>
           <p style={s.cardDesc}>채점에 필요한 파일을 모두 업로드해주세요</p>
@@ -272,6 +379,21 @@ const s = {
   input: { padding: '8px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none' },
   createBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer' },
   cancelBtn: { background: 'none', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', fontSize: 14, cursor: 'pointer', color: '#64748b' },
+
+  itemsCard: {
+    background: '#fff', borderRadius: 12, padding: '18px 24px',
+    marginBottom: 20, boxShadow: '0 1px 6px rgba(0,0,0,0.06)',
+    border: '1px solid #e2e8f0',
+  },
+  itemsHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  itemsLabel: { fontSize: 14, fontWeight: 700, color: '#1e293b' },
+  addItemBtn: { background: 'none', border: '1px solid #059669', color: '#059669', borderRadius: 6, padding: '5px 12px', fontSize: 13, cursor: 'pointer', fontWeight: 500 },
+  newItemForm: { marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
+  itemsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 10 },
+  itemCard: { border: '1.5px solid', borderRadius: 8, padding: '12px 10px', cursor: 'pointer', transition: 'all 0.2s', position: 'relative' },
+  itemName: { fontSize: 13, fontWeight: 600, color: '#1e293b', textAlign: 'center' },
+  itemDeleteBtn: { position: 'absolute', top: 4, right: 4, background: '#f1f5f9', border: 'none', color: '#64748b', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  empty: { fontSize: 13, color: '#94a3b8', textAlign: 'center', padding: '12px 0' },
 
   card: { background: '#fff', borderRadius: 16, padding: 32, boxShadow: '0 1px 8px rgba(0,0,0,0.07)' },
   cardTitle: { fontSize: 20, fontWeight: 700, color: '#1e293b', marginBottom: 8 },

@@ -29,6 +29,18 @@ class Subject(Base):
 
     owner = relationship("User", back_populates="subjects")
     sessions = relationship("GradingSessionDB", back_populates="subject")
+    items = relationship("SubjectItem", back_populates="subject", cascade="all, delete-orphan")
+
+
+class SubjectItem(Base):
+    __tablename__ = "subject_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=False)
+    name = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    subject = relationship("Subject", back_populates="items")
 
 
 class GradingSessionDB(Base):
@@ -36,6 +48,7 @@ class GradingSessionDB(Base):
 
     id = Column(String(36), primary_key=True)
     subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=True)
+    subject_item_id = Column(Integer, ForeignKey("subject_items.id"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     status = Column(String(20), default="pending")
     progress = Column(Float, default=0.0)

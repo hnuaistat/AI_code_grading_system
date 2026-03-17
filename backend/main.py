@@ -26,7 +26,7 @@ from auth import (
 )
 from schemas import (
     Token, LoginRequest, RegisterRequest, GradingCriteria, GradingSession,
-    StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem
+    StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem, SubjectItemCreate
 )
 from services.notebook_service import (
     extract_notebooks_from_zip, parse_student_id_from_filename
@@ -152,11 +152,13 @@ async def list_subjects(current_user=Depends(get_current_user), db: Session = De
         count = db.query(models.GradingSessionDB).filter(
             models.GradingSessionDB.subject_id == s.id
         ).count()
+        items = [{"id": item.id, "name": item.name, "created_at": item.created_at.isoformat()} for item in s.items]
         result.append({
             "id": s.id,
             "name": s.name,
             "code": s.code,
             "session_count": count,
+            "items": items,
             "created_at": s.created_at.isoformat(),
         })
     return result
@@ -177,7 +179,81 @@ async def create_subject(
     db.commit()
     db.refresh(subject)
     return {"id": subject.id, "name": subject.name, "code": subject.code, "session_count": 0,
-            "created_at": subject.created_at.isoformat()}
+            "items": [], "created_at": subject.created_at.isoformat()}
+
+
+@app.get("/subjects/{subject_id}")
+async def get_subject(
+    subject_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    subject = db.query(models.Subject).filter(
+        models.Subject.id == subject_id,
+        models.Subject.user_id == current_user["id"]
+    ).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
+
+    items = [{"id": item.id, "name": item.name, "created_at": item.created_at.isoformat()} for item in subject.items]
+    count = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.subject_id == subject.id
+    ).count()
+    return {
+        "id": subject.id,
+        "name": subject.name,
+        "code": subject.code,
+        "session_count": count,
+        "items": items,
+        "created_at": subject.created_at.isoformat(),
+    }
+
+
+@app.post("/subjects/{subject_id}/items")
+async def create_subject_item(
+    subject_id: int,
+    body: SubjectItemCreate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    subject = db.query(models.Subject).filter(
+        models.Subject.id == subject_id,
+        models.Subject.user_id == current_user["id"]
+    ).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
+
+    item = models.SubjectItem(subject_id=subject_id, name=body.name)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "name": item.name, "created_at": item.created_at.isoformat()}
+
+
+@app.delete("/subjects/{subject_id}/items/{item_id}")
+async def delete_subject_item(
+    subject_id: int,
+    item_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    subject = db.query(models.Subject).filter(
+        models.Subject.id == subject_id,
+        models.Subject.user_id == current_user["id"]
+    ).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
+
+    item = db.query(models.SubjectItem).filter(
+        models.SubjectItem.id == item_id,
+        models.SubjectItem.subject_id == subject_id
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="항목을 찾을 수 없습니다")
+
+    db.delete(item)
+    db.commit()
+    return {"message": "항목이 삭제되었습니다"}
 
 
 # ─── Grading ───────────────────────────────────────────────────────────────────
@@ -189,6 +265,7 @@ async def start_grading(
     student_zip: UploadFile = File(...),
     criteria_file: UploadFile = File(...),
     subject_id: Optional[int] = Form(None),
+    subject_item_id: Optional[int] = Form(None),
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -225,6 +302,7 @@ async def start_grading(
     db_record = models.GradingSessionDB(
         id=session_id,
         subject_id=subject_id,
+        subject_item_id=subject_item_id,
         user_id=current_user["id"],
         status="running",
         total_students=len(student_notebooks),
@@ -359,11 +437,20 @@ async def get_history(
     )
     result = []
     for r in records:
+        subject_item_name = None
+        if r.subject_item_id:
+            subject_item = db.query(models.SubjectItem).filter(
+                models.SubjectItem.id == r.subject_item_id
+            ).first()
+            subject_item_name = subject_item.name if subject_item else None
+
         result.append({
             "session_id": r.id,
             "subject_id": r.subject_id,
             "subject_name": r.subject.name if r.subject else None,
             "subject_code": r.subject.code if r.subject else None,
+            "subject_item_id": r.subject_item_id,
+            "subject_item_name": subject_item_name,
             "status": r.status,
             "total_students": r.total_students,
             "processed_students": r.processed_students,

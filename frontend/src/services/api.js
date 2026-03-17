@@ -28,6 +28,9 @@ export const authAPI = {
 export const subjectAPI = {
   list: () => API.get('/subjects'),
   create: (name, code) => API.post('/subjects', { name, code }),
+  getDetail: (subjectId) => API.get(`/subjects/${subjectId}`),
+  createItem: (subjectId, name) => API.post(`/subjects/${subjectId}/items`, { name }),
+  deleteItem: (subjectId, itemId) => API.delete(`/subjects/${subjectId}/items/${itemId}`),
 };
 
 export const gradingAPI = {

@@ -115,6 +115,7 @@ export default function HistoryPage() {
                     <tr style={{ background: '#f8fafc' }}>
                       <th style={th}>날짜</th>
                       <th style={th}>상태</th>
+                      <th style={th}>세부 항목</th>
                       <th style={{ ...th, textAlign: 'center' }}>학생 수</th>
                       <th style={th}>완료 시간</th>
                       <th style={{ ...th, textAlign: 'center' }}>결과 보기</th>
@@ -125,6 +126,15 @@ export default function HistoryPage() {
                       <tr key={session.session_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={td}>{formatDate(session.created_at)}</td>
                         <td style={td}><StatusBadge status={session.status} /></td>
+                        <td style={td}>
+                          {session.subject_item_name ? (
+                            <span style={{ background: '#f0fdf4', color: '#16a34a', borderRadius: 4, padding: '2px 8px', fontSize: 12, fontWeight: 500 }}>
+                              {session.subject_item_name}
+                            </span>
+                          ) : (
+                            <span style={{ color: '#94a3b8', fontSize: 13 }}>—</span>
+                          )}
+                        </td>
                         <td style={{ ...td, textAlign: 'center' }}>
                           <span style={{ fontWeight: 600 }}>{session.total_students}</span>명
                         </td>

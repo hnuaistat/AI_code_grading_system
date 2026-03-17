@@ -22,6 +22,12 @@ class RegisterRequest(BaseModel):
     password: str
 
 
+class SubjectItemResponse(BaseModel):
+    id: int
+    name: str
+    created_at: str
+
+
 class SubjectCreate(BaseModel):
     name: str
     code: Optional[str] = None
@@ -32,7 +38,12 @@ class SubjectResponse(BaseModel):
     name: str
     code: Optional[str] = None
     session_count: int = 0
+    items: List[SubjectItemResponse] = []
     created_at: str
+
+
+class SubjectItemCreate(BaseModel):
+    name: str
 
 
 class HistorySessionItem(BaseModel):
@@ -40,6 +51,8 @@ class HistorySessionItem(BaseModel):
     subject_id: Optional[int] = None
     subject_name: Optional[str] = None
     subject_code: Optional[str] = None
+    subject_item_id: Optional[int] = None
+    subject_item_name: Optional[str] = None
     status: str
     total_students: int
     processed_students: int
