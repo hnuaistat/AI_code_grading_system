@@ -1,13 +1,13 @@
 import os
 import json
 from typing import List, Dict, Any, Tuple, Optional
-import anthropic
+from openai import AsyncOpenAI
 from schemas import PartialScoreCriterion
 
 
-def get_anthropic_client() -> anthropic.AsyncAnthropic:
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    return anthropic.AsyncAnthropic(api_key=api_key)
+def get_openai_client() -> AsyncOpenAI:
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    return AsyncOpenAI(api_key=api_key)
 
 
 async def grade_with_ai(
@@ -19,7 +19,7 @@ async def grade_with_ai(
     execution_output: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
-    Claude Sonnet 4.6을 사용하여 채점 기준 기반 부분 점수 제도로 평가합니다.
+    GPT-4o를 사용하여 채점 기준 기반 부분 점수 제도로 평가합니다.
 
     - 모범 답안과 실제 풀이가 달라도 논리가 타당하면 정답으로 인정
     - 다양한 구현 방식(List Comprehension, Map/Filter, For 루프 등) 모두 인정
@@ -102,17 +102,19 @@ async def grade_with_ai(
 위의 루브릭에 기반하여 학생 코드를 평가하세요.
 모범 답안의 구현 방식과 다르더라도, 문제를 올바르게 해결했고 루브릭의 기준들을 충족한다면 정답으로 인정하세요."""
 
-    client = get_anthropic_client()
+    client = get_openai_client()
 
     try:
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
+        response = await client.chat.completions.create(
+            model="gpt-4o",
             max_tokens=2048,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}]
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
         )
 
-        content = response.content[0].text
+        content = response.choices[0].message.content
 
         # JSON 파싱 (마크다운 코드블록 제거)
         content = content.strip()
@@ -139,7 +141,6 @@ async def grade_with_ai(
                     "reason": found.get("reason", "")
                 })
             else:
-                # 루브릭에서 찾지 못한 경우, 비슷한 항목으로 매칭 시도
                 graded.append({
                     "item": c.item,
                     "max_score": c.score,
