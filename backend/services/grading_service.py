@@ -86,12 +86,12 @@ async def grade_student_notebook(
     if not student_problems:
         cells = extract_code_cells(student_nb)
         if cells:
-            student_problems = {1: [{'source': c['source'], 'outputs': []} for c in cells]}
+            student_problems = {1: {'description': '', 'cells': [{'source': c['source'], 'outputs': []} for c in cells]}}
 
     if not answer_problems:
         cells = extract_code_cells(answer_nb)
         if cells:
-            answer_problems = {1: [{'source': c['source'], 'outputs': []} for c in cells]}
+            answer_problems = {1: {'description': '', 'cells': [{'source': c['source'], 'outputs': []} for c in cells]}}
 
     # Get answer outputs (pre-computed, not from execution)
     answer_cell_outputs = extract_cell_outputs(answer_nb)
@@ -104,8 +104,12 @@ async def grade_student_notebook(
         # "Q1", "문제1" 등 문자열 problem_id에서 숫자 추출하여 노트북 셀 조회
         pid_num = int(re.sub(r'\D', '', str(pid))) if not isinstance(pid, int) else pid
 
-        ans_cells = answer_problems.get(pid_num, [])
-        stu_cells = student_problems.get(pid_num, [])
+        ans_problem_data = answer_problems.get(pid_num, {})
+        stu_problem_data = student_problems.get(pid_num, {})
+
+        ans_cells = ans_problem_data.get('cells', []) if ans_problem_data else []
+        stu_cells = stu_problem_data.get('cells', []) if stu_problem_data else []
+        problem_description = ans_problem_data.get('description', '') if ans_problem_data else ""
 
         ans_code = "\n\n".join(c['source'] for c in ans_cells) if ans_cells else ""
         stu_code = "\n\n".join(c['source'] for c in stu_cells) if stu_cells else ""
@@ -212,7 +216,8 @@ async def grade_student_notebook(
             output_match=output_match,
             partial_scores=ai_partial_scores,
             ai_feedback=ai_overall,
-            code_cells=nb_cells
+            code_cells=nb_cells,
+            problem_description=problem_description
         ))
 
     return problem_results, execution_error

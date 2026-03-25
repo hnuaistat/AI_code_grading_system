@@ -103,6 +103,7 @@ class ProblemResult(BaseModel):
     partial_scores: List[PartialScoreResult]
     ai_feedback: Optional[str] = None
     code_cells: List[NotebookCell] = []
+    problem_description: Optional[str] = None
 
 
 class StudentResult(BaseModel):

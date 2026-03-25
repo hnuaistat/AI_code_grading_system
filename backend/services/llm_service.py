@@ -65,13 +65,12 @@ async def grade_with_ai(
 1. **다양성 존중**: 학생의 구현 방식이 모범 답안과 다르더라도, 논리가 타당하고 결과가 올바르면 정답으로 인정하세요.
    - List Comprehension, Map/Filter, 일반 For 루프 등 모든 풀이 방식을 동등하게 평가합니다.
 
-2. **자율적 부분 점수 부여**:
-   - 항목이 "출력에 따라 AI가 자율적으로 부여하고 해설을 하시오"면, 학생의 실행 결과를 보고 0~만점 사이에서 자유롭게 부분점수를 부여하세요.
-     * 결과가 정확하면 → 만점
-     * 결과가 부분적으로 맞으면 → 비례점수 부여 (예: 3/4 정확 → 75%)
-     * 결과가 부정확하면 → 낮은 점수
-     * 코드나 결과가 없으면 → 0점
-   - 항목이 구체적인 세부사항 (예: "그래프 크기 8,5", "bins는 15로 설정")을 명시하면, 각 항목별로 정확히 체크하고 충족하면 해당 점수를 부여하세요.
+2. **점수 부여 기준** (각 문제의 루브릭에 명시된 full_score가 최대 점수):
+   - 결과가 정확하면 → full_score 부여
+   - 부분적으로 맞으면 → 비례 점수 부여
+   - 부정확하면 → 낮은 점수
+   - 결과가 없거나 코드가 에러면 → 0점
+   - 항목이 구체적인 세부사항 (예: "figsize=(8,5)", "bins=15")을 명시하면, 각 항목별로 정확히 체크하고 충족하면 해당 점수를 부여하세요.
 
 3. **교육적 피드백**: 잘한 점을 먼저 인정하고, 개선할 점은 이유와 함께 설명하세요.
 
@@ -136,10 +135,10 @@ async def grade_with_ai(
         rubric_scores = data.get("rubric_scores", [])
         overall_feedback = data.get("feedback", "")
 
-        # 루브릭 점수를 채점 기준 항목과 매칭
+        # 루브릭 점수를 index 기반으로 매칭 (항목명 불일치 방지)
         graded = []
-        for c in criteria:
-            found = next((r for r in rubric_scores if r.get("item") == c.item), None)
+        for i, c in enumerate(criteria):
+            found = rubric_scores[i] if i < len(rubric_scores) else None
             if found:
                 graded.append({
                     "item": c.item,
@@ -152,7 +151,7 @@ async def grade_with_ai(
                     "item": c.item,
                     "max_score": c.score,
                     "score": 0,
-                    "reason": "평가 항목을 찾을 수 없습니다"
+                    "reason": "채점 항목 누락"
                 })
 
         return graded, overall_feedback

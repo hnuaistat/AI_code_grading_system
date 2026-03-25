@@ -14,6 +14,12 @@ function NotebookPanel({ student }) {
               문제 {problem.problem_id}
             </div>
 
+            {problem.problem_description && (
+              <div style={nb.problemDesc}>
+                {problem.problem_description}
+              </div>
+            )}
+
             {problem.code_cells && problem.code_cells.length > 0 ? (
               problem.code_cells.map((cell, idx) => (
                 <div key={idx} style={nb.cell}>
@@ -78,6 +84,11 @@ function FeedbackPanel({ student }) {
                   {problem.obtained_score.toFixed(2)} / {problem.full_score}점
                 </span>
               </div>
+              {problem.evaluation_guideline && (
+                <div style={fb.problemDescription}>
+                  📌 {problem.evaluation_guideline}
+                </div>
+              )}
               <div style={fb.progressBar}>
                 <div style={{ ...fb.progressFill, width: `${pRatio * 100}%`, background: barColor }} />
               </div>
@@ -195,6 +206,12 @@ const nb = {
     fontSize: 13, fontWeight: 700, color: '#89b4fa',
     marginBottom: 10, paddingLeft: 4,
   },
+  problemDesc: {
+    background: '#2d2d3a', border: '1px solid #404050', borderRadius: 6,
+    padding: '10px 12px', marginBottom: 12, fontSize: 12,
+    color: '#a6e3a1', lineHeight: 1.6, whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  },
   cell: {
     border: '1px solid #313244', borderRadius: 8,
     marginBottom: 10, overflow: 'hidden',
@@ -259,6 +276,12 @@ const fb = {
   },
   problemTitle: { fontWeight: 700, fontSize: 15, color: '#1e293b' },
   problemScore: { fontWeight: 700, fontSize: 15 },
+  problemDescription: {
+    padding: '12px 16px', background: '#f0f9ff',
+    borderBottom: '1px solid #e2e8f0', fontSize: 13,
+    color: '#1e293b', lineHeight: 1.6,
+    wordBreak: 'break-word', whiteSpace: 'pre-wrap',
+  },
   progressBar: {
     height: 4, background: '#e2e8f0', margin: '0 16px 12px',
     borderRadius: 99, overflow: 'hidden',
