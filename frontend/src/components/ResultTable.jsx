@@ -23,7 +23,7 @@ export default function ResultTable({ results, onSelectStudent }) {
   };
 
   const Th = ({ label, field, isFirst }) => (
-    <th style={isFirst ? { ...th, ...thSticky } : th} onClick={() => field && toggleSort(field)} role={field ? 'button' : undefined}>
+    <th style={isFirst ? { ...th, ...thSticky, top: 0, zIndex: 12 } : { ...th, position: 'sticky', top: 0, background: '#f8fafc', zIndex: 5 }} onClick={() => field && toggleSort(field)} role={field ? 'button' : undefined}>
       {label} {field && sortField === field ? (sortDir === 'asc' ? '↑' : '↓') : ''}
     </th>
   );
@@ -36,18 +36,19 @@ export default function ResultTable({ results, onSelectStudent }) {
         value={search}
         onChange={e => setSearch(e.target.value)}
       />
-      <div style={{ overflowX: 'auto' }}>
+      {/* 고정 높이 스크롤 영역: 왼쪽 열 고정, 헤더 고정, 상하좌우 스크롤 */}
+      <div style={{ overflow: 'auto', height: 'calc(100vh - 320px)', minHeight: 150, maxHeight: '90vh', border: '1px solid #e2e8f0', borderRadius: 8, resize: 'vertical' }}>
         <table style={s.table}>
           <thead>
             <tr style={{ background: '#f8fafc' }}>
               <Th label="학번/이름" field="student_id" isFirst />
+              <th style={{ ...th, position: 'sticky', top: 0, background: '#f8fafc', zIndex: 5 }}>상세</th>
               {allProblemIds.map(pid => (
-                <th key={pid} style={th}>문제{pid}</th>
+                <th key={pid} style={{ ...th, position: 'sticky', top: 0, background: '#f8fafc', zIndex: 5 }}>문제{pid}</th>
               ))}
               <Th label="총점" field="total_score" />
-              <th style={th}>비율</th>
-              <th style={th}>상태</th>
-              <th style={th}>상세</th>
+              <th style={{ ...th, position: 'sticky', top: 0, background: '#f8fafc', zIndex: 5 }}>비율</th>
+              <th style={{ ...th, position: 'sticky', top: 0, background: '#f8fafc', zIndex: 5 }}>상태</th>
             </tr>
           </thead>
           <tbody>
@@ -61,6 +62,9 @@ export default function ResultTable({ results, onSelectStudent }) {
                   <td style={{ ...td, ...tdSticky }}>
                     <div style={{ fontWeight: 600, color: '#1e293b' }}>{student.student_id}</div>
                     <div style={{ fontSize: 11, color: '#94a3b8' }}>{student.filename}</div>
+                  </td>
+                  <td style={{ ...td, textAlign: 'center' }}>
+                    <button style={s.detailBtn} onClick={() => onSelectStudent(student)}>보기</button>
                   </td>
                   {allProblemIds.map(pid => {
                     const p = student.problems.find(p => p.problem_id === pid);
@@ -91,9 +95,6 @@ export default function ResultTable({ results, onSelectStudent }) {
                       : <span style={{ color: '#059669', fontSize: 12 }}>완료</span>
                     }
                   </td>
-                  <td style={{ ...td, textAlign: 'center' }}>
-                    <button style={s.detailBtn} onClick={() => onSelectStudent(student)}>보기</button>
-                  </td>
                 </tr>
               );
             })}
@@ -108,11 +109,11 @@ export default function ResultTable({ results, onSelectStudent }) {
 }
 
 const th = { padding: '12px 16px', textAlign: 'left', fontSize: 13, fontWeight: 600, color: '#374151', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' };
-const thSticky = { position: 'sticky', left: 0, background: '#f8fafc', zIndex: 11, borderRight: '1px solid #e2e8f0' };
+const thSticky = { position: 'sticky', left: 0, top: 0, background: '#f8fafc', zIndex: 12, borderRight: '1px solid #e2e8f0' };
 const td = { padding: '14px 16px', fontSize: 14, color: '#374151', verticalAlign: 'middle' };
 const tdSticky = { position: 'sticky', left: 0, background: '#fff', zIndex: 10, borderRight: '1px solid #f1f5f9' };
 const s = {
   search: { width: '100%', padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, marginBottom: 16, outline: 'none' },
   table: { width: '100%', borderCollapse: 'collapse' },
-  detailBtn: { background: '#eff6ff', color: '#2563eb', border: 'none', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+  detailBtn: { background: '#eff6ff', color: '#2563eb', border: 'none', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }
 };

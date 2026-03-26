@@ -22,7 +22,8 @@ async def grade_with_ai(
     criteria: List[PartialScoreCriterion],
     problem_id: int,
     problem_description: Optional[str] = None,
-    execution_output: Optional[str] = None
+    execution_output: Optional[str] = None,
+    global_evaluation_guideline: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     GPT-4o를 사용하여 채점 기준 기반 부분 점수 제도로 평가합니다.
@@ -59,38 +60,55 @@ async def grade_with_ai(
     if execution_output:
         execution_context = f"\n\n[코드 실행 결과]\n{execution_output}"
 
-    system_prompt = """당신은 현업 시니어 개발자이자 꼼꼼한 컴퓨터공학 전공 조교입니다.
+    # 전체 공통 가이드라인 (있으면 포함)
+    global_guideline_text = ""
+    if global_evaluation_guideline:
+        global_guideline_text = f"\n\n## 전체 공통 채점 가이드라인 (모든 문항에 반드시 적용)\n{global_evaluation_guideline}"
+
+    system_prompt = f"""당신은 현업 시니어 개발자이자 꼼꼼한 컴퓨터공학 전공 조교입니다.
+{global_guideline_text}
 
 ## 채점 원칙
 1. **다양성 존중**: 학생의 구현 방식이 모범 답안과 다르더라도, 논리가 타당하고 결과가 올바르면 정답으로 인정하세요.
    - List Comprehension, Map/Filter, 일반 For 루프 등 모든 풀이 방식을 동등하게 평가합니다.
 
-2. **점수 부여 기준** (각 문제의 루브릭에 명시된 full_score가 최대 점수):
-   - 결과가 정확하면 → full_score 부여
+2. **점수 부여 기준** (루브릭의 각 항목에 명시된 max_score가 최대 점수):
+   - 루브릭 항목을 충족하면 → 해당 항목의 max_score(만점)를 부여
    - 부분적으로 맞으면 → 비례 점수 부여
    - 부정확하면 → 낮은 점수
    - 결과가 없거나 코드가 에러면 → 0점
-   - 항목이 구체적인 세부사항 (예: "figsize=(8,5)", "bins=15")을 명시하면, 각 항목별로 정확히 체크하고 충족하면 해당 점수를 부여하세요.
 
-3. **교육적 피드백**: 잘한 점을 먼저 인정하고, 개선할 점은 이유와 함께 설명하세요.
+3. **해설과 점수의 일관성**: reason(해설)에서 해당 항목이 완전히 충족되었다고 판단했으면, 반드시 score를 max_score와 동일하게 부여하세요. 해설과 점수가 불일치하면 안 됩니다.
+
+4. **교육적 피드백**: 잘한 점을 먼저 인정하고, 개선할 점은 이유와 함께 설명하세요.
 
 ## 평가 절차
-1. Analysis: 학생 코드의 핵심 로직과 가이드라인 달성도 분석
+1. Analysis: 학생 코드의 핵심 로직과 문제별 evaluation_guideline 달성도 분석
 2. Rubric Evaluation: 각 항목별 달성 정도를 근거와 함께 점수 부여
 3. Feedback: 잘한 점과 개선 방향을 친절하게 설명
 
-반드시 다음 JSON 형식으로만 응답하세요:
-{
+반드시 다음 JSON 형식으로만 응답하세요. 반드시 아래 순서대로 작성하세요:
+1. analysis로 코드를 먼저 분석하고
+2. feedback으로 종합 평가를 내린 뒤
+3. 그 판단을 바탕으로 rubric_scores에 점수와 근거를 작성하세요.
+feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_score와 같아야 합니다.
+
+{{
   "analysis": "학생 코드의 핵심 로직과 문제 가이드라인 달성도에 대한 설명",
+  "feedback": "잘한 점, 개선할 점, 제안사항 — 이 판단이 아래 점수 부여의 근거가 됩니다",
   "rubric_scores": [
-    {"item": "항목명", "score": 점수, "max_score": 최대점수, "reason": "이유"},
+    {{"item": "항목명", "score": 점수, "max_score": 최대점수, "reason": "위 feedback을 근거로 한 해설"}},
     ...
   ],
-  "total_score": 합계,
-  "feedback": "잘한 점, 개선할 점, 제안사항"
-}"""
+  "total_score": 합계
+}}"""
 
-    user_prompt = f"""[문제 {problem_id}] 다음 학생 코드를 평가해주세요.{problem_context}
+    # 문제별 평가 가이드라인
+    guideline_text = ""
+    if problem_description:
+        guideline_text = f"\n\n## 이 문항의 평가 가이드라인\n{problem_description}"
+
+    user_prompt = f"""[문제 {problem_id}] 다음 학생 코드를 평가해주세요.{guideline_text}
 
 ## 모범 답안 (참고 자료 - 구현 방식이 다르면 틀린 것 아님)
 ```python
@@ -102,11 +120,11 @@ async def grade_with_ai(
 {student_code[:3000]}
 ```{execution_context}
 
-## 채점 루브릭
+## 채점 루브릭 (부분 점수 기준)
 {rubric_text}
 
-위의 루브릭에 기반하여 학생 코드를 평가하세요.
-모범 답안의 구현 방식과 다르더라도, 문제를 올바르게 해결했고 루브릭의 기준들을 충족한다면 정답으로 인정하세요."""
+위의 평가 가이드라인과 루브릭에 기반하여 학생 코드를 평가하세요.
+모범 답안의 구현 방식과 다르더라도, 문제를 올바르게 해결했고 기준들을 충족한다면 정답으로 인정하세요."""
 
     client = get_openai_client()
 
@@ -143,7 +161,7 @@ async def grade_with_ai(
                 graded.append({
                     "item": c.item,
                     "max_score": c.score,
-                    "score": min(float(found.get("score", 0)), c.score),
+                    "score": max(0.0, min(float(found.get("score", 0)), c.score)),
                     "reason": found.get("reason", "")
                 })
             else:

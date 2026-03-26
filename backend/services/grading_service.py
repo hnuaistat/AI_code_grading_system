@@ -178,7 +178,8 @@ async def grade_student_notebook(
                     answer_code=ans_code,
                     criteria=problem.partial_score_criteria,
                     problem_id=pid,
-                    problem_description=problem.evaluation_guideline
+                    problem_description=problem.evaluation_guideline,
+                    global_evaluation_guideline=criteria.global_evaluation_guideline
                 )
                 for r in ai_results:
                     ai_partial_scores.append(PartialScoreResult(
