@@ -110,6 +110,7 @@ class ProblemResult(BaseModel):
 class StudentResult(BaseModel):
     filename: str
     student_id: str
+    student_name: Optional[str] = None  # 노트북의 "# 이름" 셀에서 추출
     total_score: float
     max_total_score: float
     problems: List[ProblemResult]

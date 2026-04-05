@@ -359,6 +359,26 @@ async def start_grading(
     return {"session_id": session_id, "total_students": len(student_notebooks)}
 
 
+def _extract_student_info(nb_content: bytes) -> tuple[str, str]:
+    """노트북 첫 셀에서 '# 학번 :'과 '# 이름 :' 추출. (학번, 이름) 튜플 반환."""
+    try:
+        from services.notebook_service import parse_notebook
+        nb = parse_notebook(nb_content)
+        if nb.cells:
+            src = nb.cells[0].source if isinstance(nb.cells[0].source, str) else ''.join(nb.cells[0].source)
+            student_id, name = "", ""
+            for line in src.split('\n'):
+                line_stripped = line.strip().lstrip('#').strip()
+                if line_stripped.startswith('학번'):
+                    student_id = line_stripped.split(':', 1)[-1].strip()
+                elif line_stripped.startswith('이름'):
+                    name = line_stripped.split(':', 1)[-1].strip()
+            return student_id, name
+    except Exception:
+        pass
+    return "", ""
+
+
 async def run_grading_session(
     session_id: str,
     answer_bytes: bytes,
@@ -384,9 +404,13 @@ async def run_grading_session(
             total_score = sum(p.obtained_score for p in problem_results)
             max_total = sum(p.full_score for p in problem_results)
 
+            # 노트북에서 학번/이름 추출
+            nb_student_id, nb_student_name = _extract_student_info(content)
+
             student_result = StudentResult(
                 filename=filename,
-                student_id=parse_student_id_from_filename(filename),
+                student_id=nb_student_id or parse_student_id_from_filename(filename),
+                student_name=nb_student_name,
                 total_score=total_score,
                 max_total_score=max_total,
                 problems=problem_results,
@@ -399,9 +423,11 @@ async def run_grading_session(
             session.progress = (i / total) * 100
             break
         except Exception as e:
+            nb_student_id, nb_student_name = _extract_student_info(content)
             session.results.append(StudentResult(
                 filename=filename,
-                student_id=parse_student_id_from_filename(filename),
+                student_id=nb_student_id or parse_student_id_from_filename(filename),
+                student_name=nb_student_name,
                 total_score=0,
                 max_total_score=sum(p.full_score for p in criteria.problems),
                 problems=[],
@@ -631,6 +657,26 @@ async def download_excel(
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
+    from services.notebook_service import parse_notebook
+
+    def extract_name_and_id(nb_content: bytes):
+        """노트북 첫 번째 셀에서 학번/이름 추출. 예: '# 학번 :20222500\n# 이름 :배대환'"""
+        try:
+            nb = parse_notebook(nb_content)
+            if nb.cells:
+                src = nb.cells[0].source if isinstance(nb.cells[0].source, str) else ''.join(nb.cells[0].source)
+                student_id, name = "", ""
+                for line in src.split('\n'):
+                    line = line.strip().lstrip('#').strip()
+                    if line.startswith('학번'):
+                        student_id = line.split(':', 1)[-1].strip()
+                    elif line.startswith('이름'):
+                        name = line.split(':', 1)[-1].strip()
+                return student_id, name
+        except Exception:
+            pass
+        return "", ""
+
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -652,12 +698,15 @@ async def download_excel(
                     all_problem_ids.append(p.problem_id)
     all_problem_ids.sort()
 
-    headers = ["학번/이름", "파일명"]
+    # 헤더: 학번, 이름, 문제별 점수, 총점, 순위
+    headers = ["학번", "이름"]
     for pid in all_problem_ids:
         problem = next((p for r in results for p in r.problems if p.problem_id == pid), None)
         max_s = problem.full_score if problem else 0
-        headers.append(f"문제{pid} ({max_s}점)")
-    headers.extend(["총점", "만점", "비율(%)"])
+        # pid가 이미 "Q1" 형식이면 그대로, 아니면 앞에 Q 추가
+        pid_str = str(pid) if str(pid).startswith('Q') else f"Q{pid}"
+        headers.append(f"{pid_str} ({max_s}점)")
+    headers.extend(["총점", "순위"])
 
     for col, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=header)
@@ -666,22 +715,32 @@ async def download_excel(
         cell.alignment = center_align
         cell.border = thin_border
 
-    for row_idx, student in enumerate(results, 2):
+    # 총점 기준 순위 계산
+    score_list = [(i, s.total_score) for i, s in enumerate(results)]
+    score_list.sort(key=lambda x: x[1], reverse=True)
+    rank_map = {}
+    for rank, (i, score) in enumerate(score_list, 1):
+        # 동점 처리
+        if rank > 1 and score == score_list[rank - 2][1]:
+            rank_map[i] = rank_map[score_list[rank - 2][0]]
+        else:
+            rank_map[i] = rank
+
+    for row_idx, (orig_idx, student) in enumerate([(i, s) for i, s in enumerate(results)], 2):
         ws.cell(row=row_idx, column=1, value=student.student_id)
-        ws.cell(row=row_idx, column=2, value=student.filename)
+        ws.cell(row=row_idx, column=2, value=student.student_name or "")
         col = 3
         for pid in all_problem_ids:
             p = next((p for p in student.problems if p.problem_id == pid), None)
             ws.cell(row=row_idx, column=col, value=p.obtained_score if p else 0)
             col += 1
         ws.cell(row=row_idx, column=col, value=student.total_score)
-        ws.cell(row=row_idx, column=col + 1, value=student.max_total_score)
-        ratio = (student.total_score / student.max_total_score * 100) if student.max_total_score > 0 else 0
-        ws.cell(row=row_idx, column=col + 2, value=round(ratio, 1))
+        ws.cell(row=row_idx, column=col + 1, value=rank_map[orig_idx])
         for c in range(1, len(headers) + 1):
             ws.cell(row=row_idx, column=c).border = thin_border
             ws.cell(row=row_idx, column=c).alignment = center_align
 
+    # 열 너비 자동 조정
     for col in range(1, len(headers) + 1):
         max_len = max(
             len(str(ws.cell(row=r, column=col).value or ""))
@@ -689,8 +748,11 @@ async def download_excel(
         )
         ws.column_dimensions[get_column_letter(col)].width = max(max_len + 4, 12)
 
+    # 학번, 이름 열(A, B) 고정
+    ws.freeze_panes = "C2"
+
     ws2 = wb.create_sheet("상세채점")
-    detail_headers = ["학번/이름", "문제", "채점항목", "최대점수", "획득점수", "피드백"]
+    detail_headers = ["학번", "이름", "문제", "채점항목", "최대점수", "획득점수", "피드백"]
     for col, h in enumerate(detail_headers, 1):
         cell = ws2.cell(row=1, column=col, value=h)
         cell.font = header_font
@@ -703,20 +765,23 @@ async def download_excel(
         for problem in student.problems:
             for ps in problem.partial_scores:
                 ws2.cell(row=row, column=1, value=student.student_id)
-                ws2.cell(row=row, column=2, value=f"문제{problem.problem_id}")
-                ws2.cell(row=row, column=3, value=ps.item)
-                ws2.cell(row=row, column=4, value=ps.max_score)
-                ws2.cell(row=row, column=5, value=ps.score)
-                ws2.cell(row=row, column=6, value=ps.reason)
-                for c in range(1, 7):
+                ws2.cell(row=row, column=2, value=student.student_name or "")
+                ws2.cell(row=row, column=3, value=f"Q{problem.problem_id}")
+                ws2.cell(row=row, column=4, value=ps.item)
+                ws2.cell(row=row, column=5, value=ps.max_score)
+                ws2.cell(row=row, column=6, value=ps.score)
+                ws2.cell(row=row, column=7, value=ps.reason)
+                for c in range(1, 8):
                     ws2.cell(row=row, column=c).border = thin_border
                 row += 1
 
-    for col in range(1, 7):
+    for col in range(1, 8):
         max_len = max(
             len(str(ws2.cell(r2, col).value or "")) for r2 in range(1, row)
         )
         ws2.column_dimensions[get_column_letter(col)].width = min(max_len + 4, 60)
+
+    ws2.freeze_panes = "C2"
 
     buf = io.BytesIO()
     wb.save(buf)
