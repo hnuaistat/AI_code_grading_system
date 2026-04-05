@@ -1,5 +1,6 @@
 import re
 import json
+import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from schemas import (
     GradingCriteria, Problem, StudentResult, ProblemResult,
@@ -82,6 +83,12 @@ async def grade_student_notebook(
     student_problems = split_notebook_by_problems(student_nb)
     answer_problems = split_notebook_by_problems(answer_nb)
 
+    print(f"[DEBUG] 학생 문제 키: {list(student_problems.keys())}")
+    for k, v in student_problems.items():
+        cells = v.get('cells', [])
+        code_preview = cells[0]['source'][:50] if cells else '(없음)'
+        print(f"[DEBUG]   Q{k}: 셀 {len(cells)}개 | {code_preview}")
+
     # Fallback: if no problem markers, treat all cells as problem 1
     if not student_problems:
         cells = extract_code_cells(student_nb)
@@ -103,9 +110,18 @@ async def grade_student_notebook(
         # 처리 전용 criteria 복사 (원본 수정 방지)
         working_criteria = list(problem.partial_score_criteria)
 
-        # 배점 합계 계산 (AI에게 정보 제공용)
+        # 배점 합계 계산
         criteria_sum = sum(c.score for c in working_criteria)
-        remaining_score = problem.full_score - criteria_sum
+        if problem.scoring_mode == "deductive":
+            remaining_score = 0.0
+        else:
+            remaining_score = problem.full_score - criteria_sum
+            # 남은 배점이 있으면 AI 자율 평가 항목으로 추가 (집계에 반영되도록)
+            if remaining_score > 0:
+                working_criteria.append(PartialScoreCriterion(
+                    item="종합 코드 품질",
+                    score=remaining_score
+                ))
         pid = problem.problem_id
         # "Q1", "문제1" 등 문자열 problem_id에서 숫자 추출하여 노트북 셀 조회
         pid_num = int(re.sub(r'\D', '', str(pid))) if not isinstance(pid, int) else pid
@@ -179,6 +195,7 @@ async def grade_student_notebook(
 
         # partial_score_criteria가 비어있거나 있으면 모두 AI 채점 시도
         if no_code_reason is None:
+            await asyncio.sleep(1)
             try:
                 ai_results, ai_overall = await grade_with_ai(
                     student_code=stu_code,
@@ -188,7 +205,8 @@ async def grade_student_notebook(
                     problem_description=problem.evaluation_guideline,
                     global_evaluation_guideline=criteria.global_evaluation_guideline,
                     full_score=problem.full_score,
-                    remaining_score=remaining_score
+                    remaining_score=0,  # 이미 working_criteria에 추가했으므로 중복 방지
+                    scoring_mode=problem.scoring_mode
                 )
                 for r in ai_results:
                     ai_partial_scores.append(PartialScoreResult(
@@ -217,12 +235,15 @@ async def grade_student_notebook(
                     reason=reason
                 ))
 
-        obtained = sum(ps.score for ps in ai_partial_scores)
+        if problem.scoring_mode == "deductive":
+            obtained = problem.full_score + sum(ps.score for ps in ai_partial_scores)
+        else:
+            obtained = sum(ps.score for ps in ai_partial_scores)
 
         problem_results.append(ProblemResult(
             problem_id=pid,
             full_score=problem.full_score,
-            obtained_score=min(obtained, problem.full_score),
+            obtained_score=max(0.0, min(obtained, problem.full_score)),
             output_match=output_match,
             partial_scores=ai_partial_scores,
             ai_feedback=ai_overall,

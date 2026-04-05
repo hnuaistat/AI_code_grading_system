@@ -70,6 +70,7 @@ class Problem(BaseModel):
     full_score: float
     partial_score_criteria: List[PartialScoreCriterion]
     evaluation_guideline: Optional[str] = None
+    scoring_mode: str = "additive"  # "additive" | "deductive"
 
 
 class GradingCriteria(BaseModel):

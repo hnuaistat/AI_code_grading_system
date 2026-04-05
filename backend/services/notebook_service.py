@@ -106,27 +106,34 @@ def split_notebook_by_problems(nb: nbformat.NotebookNode) -> Dict[int, Dict[str,
     """
     마크다운 셀의 문제 마커로 문제별 셀 분리 + 문제 설명 추출.
 
-    전략:
+    신규 포맷 (레벨1 문제 마커가 있는 경우):
+    - # Q1. / # 문제1 처럼 레벨1 헤더에 문제 번호 → 새 큰 문제 시작
+    - 레벨1 헤더(#)에 문제 번호 없음 → 학생 정보/시험 제목 등 메타데이터로 무시
+    - ## 1, ## 2 등 레벨2+ 헤더 → 현재 문제의 소문제 설명으로 누적
+
+    폴백 포맷 (레벨1 문제 마커가 없는 경우):
     - ## Q1. / ## 문제1 처럼 레벨2+ 헤더에 문제 번호가 있으면 그것만 사용.
-      이 경우 레벨1 헤더(# ...)는 섹션 구분자로 처리하여 current_problem을 리셋.
-      → # **문제1**, # 데이터 로드 등의 섹션 제목이 문제 코드로 오인되는 것을 방지.
-    - 레벨2+ 마커가 없으면 모든 레벨에서 문제 번호 탐색 (기존 동작 폴백).
+      레벨1 헤더(# ...)는 섹션 구분자로 처리.
+    - 레벨2+ 마커도 없으면 모든 레벨에서 문제 번호 탐색.
 
     반환: {problem_id: {'description': 문제설명, 'cells': [cell_dict, ...]}}
     """
     PROBLEM_RE = re.compile(r'(?:Q|문제|Problem|question)\s*[:#.]?\s*(\d+)', re.IGNORECASE)
+    # "Q1", "Q2" 등 Q/question 키워드가 포함된 진짜 문제 마커 (# **문제1** 같은 섹션 제목 제외)
+    QUESTION_RE = re.compile(r'(?:Q|Problem|question)\s*[:#.]?\s*(\d+)', re.IGNORECASE)
     LEVEL1_RE = re.compile(r'^#(?!#)')   # # 으로 시작하되 ## 는 아닌 것
     LEVEL2_RE = re.compile(r'^#{2,}')   # ## 이상
 
-    # 레벨2+ 헤더에 문제 마커가 있는지 먼저 확인
-    has_level2_markers = False
+    # 레벨1 헤더에 Q1/Q2 같은 문제 마커가 있는지 확인 (신규 포맷 감지)
+    # "# **문제1**" 같은 섹션 제목은 제외 — Q/question 키워드만 인정
+    has_level1_markers = False
     for cell in nb.cells:
         if cell.cell_type != 'markdown':
             continue
         src = _get_source(cell)
         first_line = src.strip().split('\n')[0]
-        if LEVEL2_RE.match(first_line) and PROBLEM_RE.search(first_line):
-            has_level2_markers = True
+        if LEVEL1_RE.match(first_line) and QUESTION_RE.search(first_line):
+            has_level1_markers = True
             break
 
     problems: Dict[int, Dict[str, Any]] = {}
@@ -134,27 +141,95 @@ def split_notebook_by_problems(nb: nbformat.NotebookNode) -> Dict[int, Dict[str,
     problem_cells: List[Dict[str, Any]] = []
     problem_description = ""
 
-    for cell in nb.cells:
-        if cell.cell_type == 'markdown':
-            src = _get_source(cell)
-            first_line = src.strip().split('\n')[0]
+    if has_level1_markers:
+        # 신규 포맷: # Q1이 큰 문제, ## 1 ## 2가 소문제
+        for cell in nb.cells:
+            if cell.cell_type == 'markdown':
+                src = _get_source(cell)
+                first_line = src.strip().split('\n')[0]
 
-            if has_level2_markers:
-                # 레벨1 헤더 → 섹션 구분자: 현재 문제 저장 후 리셋
                 if LEVEL1_RE.match(first_line):
-                    if current_problem > 0:
-                        problems[current_problem] = {
-                            'description': problem_description,
-                            'cells': problem_cells
-                        }
+                    m = PROBLEM_RE.search(first_line)
+                    if m:
+                        # 레벨1 + 문제 번호 → 새 문제 시작
+                        if current_problem > 0:
+                            problems[current_problem] = {
+                                'description': problem_description,
+                                'cells': problem_cells
+                            }
+                        current_problem = int(m.group(1))
                         problem_cells = []
-                        problem_description = ""
-                        current_problem = 0
+                        problem_description = src.strip()
+                    else:
+                        # 레벨1인데 문제 번호 없음 → 섹션 구분자, current_problem 리셋
+                        if current_problem > 0:
+                            problems[current_problem] = {
+                                'description': problem_description,
+                                'cells': problem_cells
+                            }
+                            problem_cells = []
+                            problem_description = ""
+                            current_problem = 0
                     continue
 
-                # 레벨2+ 헤더에서만 문제 번호 추출
                 if LEVEL2_RE.match(first_line):
-                    m = PROBLEM_RE.search(first_line)
+                    # 소문제(## 1, ## 2 등) → 현재 문제 설명에 누적
+                    if current_problem > 0:
+                        problem_description += "\n\n" + src.strip()
+                    continue
+
+                # - 로 시작하는 설명/지시사항 → 현재 문제 설명에 누적
+                if current_problem > 0:
+                    problem_description += "\n\n" + src.strip()
+                continue
+
+            elif cell.cell_type == 'code':
+                src = _get_source(cell)
+                if src.strip() and current_problem > 0:
+                    problem_cells.append({
+                        'source': src,
+                        'outputs': cell.get('outputs', [])
+                    })
+
+    else:
+        # 폴백: 레벨2+ 마커 우선, 그것도 없으면 모든 레벨 탐색
+        has_level2_markers = any(
+            LEVEL2_RE.match(_get_source(cell).strip().split('\n')[0]) and
+            PROBLEM_RE.search(_get_source(cell).strip().split('\n')[0])
+            for cell in nb.cells
+            if cell.cell_type == 'markdown'
+        )
+
+        for cell in nb.cells:
+            if cell.cell_type == 'markdown':
+                src = _get_source(cell)
+                first_line = src.strip().split('\n')[0]
+
+                if has_level2_markers:
+                    if LEVEL1_RE.match(first_line):
+                        if current_problem > 0:
+                            problems[current_problem] = {
+                                'description': problem_description,
+                                'cells': problem_cells
+                            }
+                            problem_cells = []
+                            problem_description = ""
+                            current_problem = 0
+                        continue
+
+                    if LEVEL2_RE.match(first_line):
+                        m = PROBLEM_RE.search(first_line)
+                        if m:
+                            if current_problem > 0:
+                                problems[current_problem] = {
+                                    'description': problem_description,
+                                    'cells': problem_cells
+                                }
+                            current_problem = int(m.group(1))
+                            problem_cells = []
+                            problem_description = src.strip()
+                else:
+                    m = PROBLEM_RE.search(src)
                     if m:
                         if current_problem > 0:
                             problems[current_problem] = {
@@ -164,27 +239,15 @@ def split_notebook_by_problems(nb: nbformat.NotebookNode) -> Dict[int, Dict[str,
                         current_problem = int(m.group(1))
                         problem_cells = []
                         problem_description = src.strip()
-            else:
-                # 폴백: 모든 레벨에서 문제 번호 탐색
-                m = PROBLEM_RE.search(src)
-                if m:
-                    if current_problem > 0:
-                        problems[current_problem] = {
-                            'description': problem_description,
-                            'cells': problem_cells
-                        }
-                    current_problem = int(m.group(1))
-                    problem_cells = []
-                    problem_description = src.strip()
-            continue
+                continue
 
-        if cell.cell_type == 'code':
-            src = _get_source(cell)
-            if src.strip() and current_problem > 0:
-                problem_cells.append({
-                    'source': src,
-                    'outputs': cell.get('outputs', [])
-                })
+            elif cell.cell_type == 'code':
+                src = _get_source(cell)
+                if src.strip() and current_problem > 0:
+                    problem_cells.append({
+                        'source': src,
+                        'outputs': cell.get('outputs', [])
+                    })
 
     if current_problem > 0 and problem_cells:
         problems[current_problem] = {

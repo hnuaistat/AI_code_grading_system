@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 from openai import AsyncOpenAI
@@ -15,6 +16,21 @@ class APIQuotaError(Exception):
 def get_openai_client() -> AsyncOpenAI:
     api_key = os.getenv("OPENAI_API_KEY", "")
     return AsyncOpenAI(api_key=api_key)
+
+
+async def _call_with_retry(coro_fn, max_retries: int = 3):
+    """RateLimitError 발생 시 exponential backoff으로 재시도."""
+    delay = 10
+    for attempt in range(max_retries + 1):
+        try:
+            return await coro_fn()
+        except openai.RateLimitError as e:
+            if attempt == max_retries:
+                print(f"[Retry] 최대 재시도 횟수 초과. 포기합니다.")
+                raise APIQuotaError(str(e))
+            print(f"[Retry] RateLimitError 발생 (시도 {attempt + 1}/{max_retries}). {delay}초 후 재시도...")
+            await asyncio.sleep(delay)
+            delay *= 2
 
 
 def _load_rubric_guide() -> str:
@@ -85,14 +101,14 @@ async def generate_rubric_with_ai(
     client = get_openai_client()
 
     try:
-        response = await client.chat.completions.create(
-            model="gpt-4o",
+        response = await _call_with_retry(lambda: client.chat.completions.create(
+            model="gpt-4o-mini",
             max_tokens=4096,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ]
-        )
+        ))
 
         content = response.choices[0].message.content.strip()
 
@@ -107,8 +123,8 @@ async def generate_rubric_with_ai(
         rubric = json.loads(content)
         return rubric
 
-    except openai.RateLimitError as e:
-        raise APIQuotaError(str(e))
+    except APIQuotaError:
+        raise
     except json.JSONDecodeError as e:
         raise ValueError(f"AI 응답 JSON 파싱 오류: {str(e)}\n응답 내용: {content[:500]}")
     except Exception as e:
@@ -124,7 +140,8 @@ async def grade_with_ai(
     execution_output: Optional[str] = None,
     global_evaluation_guideline: Optional[str] = None,
     full_score: Optional[float] = None,
-    remaining_score: Optional[float] = None
+    remaining_score: Optional[float] = None,
+    scoring_mode: str = "additive"
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     GPT-4o를 사용하여 채점 기준 기반 부분 점수 제도로 평가합니다.
@@ -161,15 +178,16 @@ async def grade_with_ai(
         criteria = [PartialScoreCriterion(item="종합 평가", score=full_score)]
 
     # 루브릭을 문자열로 포맷팅
-    rubric_text = "\n".join([
-        f"- {c.item}: 최대 {c.score}점"
-        for c in criteria
-    ])
-
-    # 문제 설명 (있으면 포함)
-    problem_context = ""
-    if problem_description:
-        problem_context = f"\n\n[문제 설명]\n{problem_description}"
+    if scoring_mode == "deductive":
+        rubric_text = "\n".join([
+            f"- {c.item}: {c.score}점 (감점 항목)"
+            for c in criteria
+        ])
+    else:
+        rubric_text = "\n".join([
+            f"- {c.item}: 최대 {c.score}점"
+            for c in criteria
+        ])
 
     # 실행 결과 (있으면 포함)
     execution_context = ""
@@ -186,6 +204,26 @@ async def grade_with_ai(
     if remaining_score and remaining_score > 0:
         remaining_info = f"\n\n⚠️ **중요**: 아래 루브릭 항목들의 합계가 {full_score}점보다 작습니다. 아래 점수 항목 외에 **{remaining_score:.1f}점의 추가 배점**이 있으므로, 전체 코드 품질과 학생의 이해도를 종합적으로 평가하여 이 {remaining_score:.1f}점을 추가로 부여하세요."
 
+    if scoring_mode == "deductive":
+        scoring_instruction = """2. **점수 부여 기준** (감점 방식):
+   - 이 문항은 만점에서 시작해 위반 항목을 감점하는 방식입니다.
+   - 위반 없음 → score = 0 (감점 없음)
+   - 위반 있음 → score = 해당 감점값 (반드시 음수, 예: -1.0, -0.5)
+   - 점수를 양수로 바꾸지 마세요. 감점 항목의 score는 반드시 0 이하여야 합니다."""
+        consistency_instruction = "feedback에서 위반이 없다고 했으면 score는 반드시 0이어야 합니다. 위반이 있다고 했으면 score는 반드시 해당 감점값(음수)이어야 합니다."
+        score_field_desc = '"score": "0 (위반 없음) 또는 감점값 (반드시 음수, 예: -1.0, -0.5)"'
+    else:
+        scoring_instruction = """2. **점수 부여 기준**:
+   - **부분점수 항목들** (0점 또는 해당 점수만 - 체크리스트 방식):
+     - 항목을 완전히 충족 → 해당 항목의 만점
+     - 항목을 충족하지 않음 → 0점 (부분점 없음)
+   - **추가 배점** (AI 자율 판단 - 위 항목들 외의 배점):
+     - 위 항목들 점수 합계 < full_score인 경우, 그 차이를 전체 코드 품질로 자율적으로 부여
+     - 코드 구현의 완성도, 효율성, 가독성 등을 종합 평가하여 추가 점수 부여
+     - 코드가 에러나면 → 추가 배점 0점"""
+        consistency_instruction = "feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_score와 같아야 합니다."
+        score_field_desc = '"score": "0 또는 max_score만 (예: max_score가 2이면 0 또는 2. 중간값 없음)"'
+
     system_prompt = f"""당신은 현업 시니어 개발자이자 꼼꼼한 컴퓨터공학 전공 조교입니다.
 {global_guideline_text}{remaining_info}
 
@@ -193,18 +231,14 @@ async def grade_with_ai(
 1. **다양성 존중**: 학생의 구현 방식이 모범 답안과 다르더라도, 논리가 타당하고 결과가 올바르면 정답으로 인정하세요.
    - List Comprehension, Map/Filter, 일반 For 루프 등 모든 풀이 방식을 동등하게 평가합니다.
 
-2. **점수 부여 기준**:
-   - **부분점수 항목들** (0점 또는 해당 점수만 - 체크리스트 방식):
-     - 항목을 완전히 충족 → 해당 항목의 만점
-     - 항목을 충족하지 않음 → 0점 (부분점 없음)
-   - **추가 배점** (AI 자율 판단 - 위 항목들 외의 배점):
-     - 위 항목들 점수 합계 < full_score인 경우, 그 차이를 전체 코드 품질로 자율적으로 부여
-     - 코드 구현의 완성도, 효율성, 가독성 등을 종합 평가하여 추가 점수 부여
-     - 코드가 에러나면 → 추가 배점 0점
+{scoring_instruction}
 
 3. **해설과 점수의 일관성**: reason(해설)에서 해당 항목이 완전히 충족되었다고 판단했으면, 반드시 score를 max_score와 동일하게 부여하세요. 해설과 점수가 불일치하면 안 됩니다.
 
-4. **교육적 피드백**: 잘한 점을 먼저 인정하고, 개선할 점은 이유와 함께 설명하세요.
+4. **피드백 원칙**: 잘한 점을 간단히 인정하세요. 개선할 점은 **실제 오류나 문제 요구사항 미충족**에 한해서만 언급하세요.
+   - 코드 스타일, 주석 부족, 변수명, 가독성 개선 등 사소한 제안은 하지 마세요.
+   - 정답을 맞춘 코드에 대해 "더 좋은 방법"을 제안하지 마세요.
+   - 피드백은 짧고 핵심만 전달하세요.
 
 ## 평가 절차
 1. Analysis: 학생 코드의 핵심 로직과 문제별 evaluation_guideline 달성도 분석
@@ -215,7 +249,7 @@ async def grade_with_ai(
 1. analysis로 코드를 먼저 분석하고
 2. feedback으로 종합 평가를 내린 뒤
 3. 그 판단을 바탕으로 rubric_scores에 점수와 근거를 작성하세요.
-feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_score와 같아야 합니다.
+{consistency_instruction}
 
 {{
   "analysis": "학생 코드의 핵심 로직과 문제 가이드라인 달성도에 대한 설명",
@@ -223,7 +257,7 @@ feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_sc
   "rubric_scores": [
     {{
   "item": "항목명",
-  "score": "0 또는 max_score만 (예: max_score가 2이면 0 또는 2. 중간값 없음)",
+  {score_field_desc},
   "max_score": 최대점수,
   "reason": "위 feedback을 근거로 한 해설"
 }},
@@ -258,14 +292,14 @@ feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_sc
     client = get_openai_client()
 
     try:
-        response = await client.chat.completions.create(
-            model="gpt-4o",
+        response = await _call_with_retry(lambda: client.chat.completions.create(
+            model="gpt-4o-mini",
             max_tokens=2048,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ]
-        )
+        ))
 
         content = response.choices[0].message.content
 
@@ -287,10 +321,15 @@ feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_sc
         for i, c in enumerate(criteria):
             found = rubric_scores[i] if i < len(rubric_scores) else None
             if found:
+                raw_score = float(found.get("score", 0))
+                if scoring_mode == "deductive":
+                    clamped_score = max(c.score, min(0.0, raw_score))
+                else:
+                    clamped_score = max(0.0, min(raw_score, c.score))
                 graded.append({
                     "item": c.item,
                     "max_score": c.score,
-                    "score": max(0.0, min(float(found.get("score", 0)), c.score)),
+                    "score": clamped_score,
                     "reason": found.get("reason", "")
                 })
             else:
@@ -314,8 +353,8 @@ feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_sc
             for c in criteria
         ], f"AI 평가 중 응답 형식 오류: {str(e)}"
 
-    except openai.RateLimitError as e:
-        raise APIQuotaError(str(e))
+    except APIQuotaError:
+        raise
 
     except Exception as e:
         return [

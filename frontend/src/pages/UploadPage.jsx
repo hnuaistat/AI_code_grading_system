@@ -5,6 +5,22 @@ import { useAuth } from '../App';
 import { gradingAPI, subjectAPI } from '../services/api';
 import StepIndicator from '../components/StepIndicator';
 
+// Number input의 화살표 제거
+const style = document.createElement('style');
+style.textContent = `
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+`;
+if (typeof document !== 'undefined') {
+  document.head.appendChild(style);
+}
+
 const STEPS = ['파일 업로드', 'AI 루브릭 생성', '루브릭 확인/수정', '채점 실행'];
 
 function DropZone({ label, icon, accept, onDrop, file }) {
@@ -38,8 +54,23 @@ const dz = {
 
 /* ── Rubric Editor Component ── */
 function RubricEditor({ rubric, onChange }) {
+  const [totalScoreEdit, setTotalScoreEdit] = useState(null);
+
   const updateField = (field, value) => {
-    onChange({ ...rubric, [field]: value });
+    if (field === 'total_score') {
+      // 총점 변경 시, 문제별 배점을 비례적으로 조정
+      const oldTotal = getTotalScore();
+      if (oldTotal > 0 && value > 0) {
+        const ratio = value / oldTotal;
+        const problems = rubric.problems.map(p => ({
+          ...p,
+          full_score: Math.round(p.full_score * ratio * 100) / 100
+        }));
+        onChange({ ...rubric, problems });
+      }
+    } else {
+      onChange({ ...rubric, [field]: value });
+    }
   };
 
   const updateProblem = (idx, field, value) => {
@@ -59,7 +90,7 @@ function RubricEditor({ rubric, onChange }) {
   const updateCriteria = (pIdx, cIdx, field, value) => {
     const problems = [...rubric.problems];
     const criteria = [...problems[pIdx].partial_score_criteria];
-    criteria[cIdx] = { ...criteria[cIdx], [field]: field === 'score' ? (parseFloat(value) || 0) : value };
+    criteria[cIdx] = { ...criteria[cIdx], [field]: value };
     problems[pIdx] = { ...problems[pIdx], partial_score_criteria: criteria };
     onChange({ ...rubric, problems });
   };
@@ -86,6 +117,7 @@ function RubricEditor({ rubric, onChange }) {
         problem_id: `Q${nextId}`,
         full_score: 5,
         evaluation_guideline: '',
+        scoring_mode: 'additive',
         partial_score_criteria: [{ item: '출력에 따라 AI가 자율적으로 부여하고 해설을 하시오', score: 5 }]
       }]
     });
@@ -95,8 +127,8 @@ function RubricEditor({ rubric, onChange }) {
     onChange({ ...rubric, problems: rubric.problems.filter((_, i) => i !== idx) });
   };
 
-  const getCriteriaSum = (criteria) => criteria.reduce((sum, c) => sum + (parseFloat(c.score) || 0), 0);
-  const getTotalScore = () => rubric.problems.reduce((sum, p) => sum + (parseFloat(p.full_score) || 0), 0);
+  const getCriteriaSum = (criteria) => Math.round(criteria.reduce((sum, c) => sum + (parseFloat(c.score) || 0), 0) * 100) / 100;
+  const getTotalScore = () => Math.round(rubric.problems.reduce((sum, p) => sum + (parseFloat(p.full_score) || 0), 0) * 100) / 100;
 
   return (
     <div style={re.wrapper}>
@@ -124,14 +156,28 @@ function RubricEditor({ rubric, onChange }) {
 
       <div style={re.totalBar}>
         <span style={re.totalLabel}>총점</span>
-        <span style={re.totalScore}>{getTotalScore()}점</span>
+        <input
+          style={re.totalScoreInput}
+          type="number"
+          step="0.25"
+          value={totalScoreEdit !== null ? totalScoreEdit : getTotalScore()}
+          onChange={e => setTotalScoreEdit(e.target.value)}
+          onBlur={e => {
+            const val = parseFloat(e.target.value) || 0;
+            if (val > 0) updateField('total_score', val);
+            setTotalScoreEdit(null);
+          }}
+          min="0"
+        />
+        <span style={re.scoreUnit}>점</span>
         <span style={re.totalCount}>{rubric.problems.length}문항</span>
       </div>
 
       {/* Problems */}
       {rubric.problems.map((problem, pIdx) => {
         const criteriaSum = getCriteriaSum(problem.partial_score_criteria);
-        const mismatch = Math.abs(criteriaSum - (parseFloat(problem.full_score) || 0)) > 0.001;
+        const isDeductive = problem.scoring_mode === 'deductive';
+        const mismatch = !isDeductive && Math.abs(criteriaSum - (parseFloat(problem.full_score) || 0)) > 0.001;
 
         return (
           <div key={pIdx} style={re.problemCard}>
@@ -149,8 +195,9 @@ function RubricEditor({ rubric, onChange }) {
                     type="number"
                     step="0.25"
                     min="0"
-                    value={problem.full_score}
-                    onChange={e => updateProblem(pIdx, 'full_score', parseFloat(e.target.value) || 0)}
+                    value={problem.full_score ?? 0}
+                    onChange={e => updateProblem(pIdx, 'full_score', e.target.value)}
+                    onBlur={e => updateProblem(pIdx, 'full_score', parseFloat(e.target.value) || 0)}
                   />
                   <span style={re.scoreUnit}>점</span>
                 </div>
@@ -167,6 +214,18 @@ function RubricEditor({ rubric, onChange }) {
                 placeholder="이 문항의 핵심 요구사항"
                 rows={2}
               />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <label style={re.smallLabel}>채점 방식</label>
+              <select
+                value={problem.scoring_mode || 'additive'}
+                onChange={e => updateProblem(pIdx, 'scoring_mode', e.target.value)}
+                style={{ fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #d1d5db' }}
+              >
+                <option value="additive">가점 방식 (~ 하면 득점)</option>
+                <option value="deductive">감점 방식 (~ 안 하면 감점)</option>
+              </select>
             </div>
 
             <div style={re.criteriaSection}>
@@ -191,9 +250,10 @@ function RubricEditor({ rubric, onChange }) {
                     style={re.criteriaScoreInput}
                     type="number"
                     step="0.25"
-                    min="0"
-                    value={c.score}
+                    min={isDeductive ? undefined : "0"}
+                    value={c.score ?? 0}
                     onChange={e => updateCriteria(pIdx, cIdx, 'score', e.target.value)}
+                    onBlur={e => updateCriteria(pIdx, cIdx, 'score', parseFloat(e.target.value) || 0)}
                   />
                   <span style={re.scoreUnit}>점</span>
                   <button
@@ -231,6 +291,11 @@ const re = {
   },
   totalLabel: { fontSize: 14, fontWeight: 600, color: '#0369a1' },
   totalScore: { fontSize: 20, fontWeight: 700, color: '#0369a1' },
+  totalScoreInput: {
+    padding: '6px 10px', border: '1.5px solid #bae6fd', borderRadius: 8, fontSize: 18,
+    fontWeight: 700, width: 80, outline: 'none', color: '#0369a1', textAlign: 'center',
+    background: '#fff',
+  },
   totalCount: { fontSize: 13, color: '#0369a1', marginLeft: 'auto' },
   problemCard: {
     border: '1.5px solid #e2e8f0', borderRadius: 12, padding: 20,
