@@ -34,7 +34,7 @@ export const subjectAPI = {
 };
 
 export const gradingAPI = {
-  generateRubric: (formData) => API.post('/grading/generate-rubric', formData, {
+  parseNotebook: (formData) => API.post('/rubric/parse-notebook', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),
   startGrading: (formData) => API.post('/grading/start', formData, {

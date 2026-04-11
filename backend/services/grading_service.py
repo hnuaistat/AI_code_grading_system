@@ -105,6 +105,9 @@ async def grade_student_notebook(
     student_cell_outputs = extract_cell_outputs(student_nb)
 
     problem_results = []
+    # 첫 문제 이전 공통 셀 (# 데이터 불러오기 + 패키지 임포트 등)
+    stu_preamble_cells = student_problems.get(0, {}).get('cells', [])
+    is_first_problem = True
 
     for problem in criteria.problems:
         # 처리 전용 criteria 복사 (원본 수정 방지)
@@ -112,16 +115,13 @@ async def grade_student_notebook(
 
         # 배점 합계 계산
         criteria_sum = sum(c.score for c in working_criteria)
-        if problem.scoring_mode == "deductive":
-            remaining_score = 0.0
-        else:
-            remaining_score = problem.full_score - criteria_sum
-            # 남은 배점이 있으면 AI 자율 평가 항목으로 추가 (집계에 반영되도록)
-            if remaining_score > 0:
-                working_criteria.append(PartialScoreCriterion(
-                    item="종합 코드 품질",
-                    score=remaining_score
-                ))
+        remaining_score = problem.full_score - criteria_sum
+        # 남은 배점이 있으면 AI 자율 평가 항목으로 추가 (집계에 반영되도록)
+        if remaining_score > 0:
+            working_criteria.append(PartialScoreCriterion(
+                item="종합 코드 품질",
+                score=remaining_score
+            ))
         pid = problem.problem_id
         # "Q1", "문제1" 등 문자열 problem_id에서 숫자 추출하여 노트북 셀 조회
         pid_num = int(re.sub(r'\D', '', str(pid))) if not isinstance(pid, int) else pid
@@ -133,14 +133,17 @@ async def grade_student_notebook(
         stu_cells = stu_problem_data.get('cells', []) if stu_problem_data else []
         problem_description = ans_problem_data.get('description', '') if ans_problem_data else ""
 
-        ans_code = "\n\n".join(c['source'] for c in ans_cells) if ans_cells else ""
-        stu_code = "\n\n".join(c['source'] for c in stu_cells) if stu_cells else ""
+        # 코드 셀만 추출 (마크다운 셀 제외) — AI 채점 및 출력 비교용
+        ans_code_cells = [c for c in ans_cells if c.get('cell_type', 'code') == 'code']
+        stu_code_cells = [c for c in stu_cells if c.get('cell_type', 'code') == 'code']
+
+        ans_code = "\n\n".join(c['source'] for c in ans_code_cells) if ans_code_cells else ""
+        stu_code = "\n\n".join(c['source'] for c in stu_code_cells) if stu_code_cells else ""
 
         # Output comparison (use stored outputs)
-        # Match cells by problem index
         ans_outputs_flat = []
         stu_outputs_flat = []
-        for c in ans_cells:
+        for c in ans_code_cells:
             for o in c.get('outputs', []):
                 text = ""
                 if o.get('output_type') == 'stream':
@@ -152,7 +155,7 @@ async def grade_student_notebook(
                 if text:
                     ans_outputs_flat.append({'type': o.get('output_type', ''), 'text': text})
 
-        for c in stu_cells:
+        for c in stu_code_cells:
             for o in c.get('outputs', []):
                 text = ""
                 if o.get('output_type') == 'stream':
@@ -166,23 +169,45 @@ async def grade_student_notebook(
 
         output_match, similarity = compare_outputs(ans_outputs_flat, stu_outputs_flat)
 
-        # Build notebook cells for display
+        # Build notebook cells for display (코드 + 마크다운 모두 포함)
         nb_cells = []
+        nb_preamble = []
+        if is_first_problem:
+            for c in stu_preamble_cells:
+                if c.get('cell_type') == 'markdown':
+                    nb_preamble.append(NotebookCell(source=c['source'], outputs=[], cell_type='markdown'))  # type: ignore
+                else:
+                    cell_outputs = []
+                    for o in c.get('outputs', []):
+                        text = ""
+                        if o.get('output_type') == 'stream':
+                            t = o.get('text', '')
+                            text = ''.join(t) if isinstance(t, list) else t
+                        elif o.get('output_type') in ('execute_result', 'display_data'):
+                            t = o.get('data', {}).get('text/plain', '')
+                            text = ''.join(t) if isinstance(t, list) else t
+                        if text.strip():
+                            cell_outputs.append(NotebookCellOutput(output_type=o.get('output_type', ''), text=text.strip()))
+                    nb_preamble.append(NotebookCell(source=c['source'], outputs=cell_outputs, cell_type='code'))  # type: ignore
+            is_first_problem = False
         for c in stu_cells:
-            cell_outputs = []
-            for o in c.get('outputs', []):
-                text = ""
-                if o.get('output_type') == 'stream':
-                    t = o.get('text', '')
-                    text = ''.join(t) if isinstance(t, list) else t
-                elif o.get('output_type') in ('execute_result', 'display_data'):
-                    t = o.get('data', {}).get('text/plain', '')
-                    text = ''.join(t) if isinstance(t, list) else t
-                if text.strip():
-                    cell_outputs.append(NotebookCellOutput(
-                        output_type=o.get('output_type', ''), text=text.strip()
-                    ))
-            nb_cells.append(NotebookCell(source=c['source'], outputs=cell_outputs))  # type: ignore
+            if c.get('cell_type', 'code') == 'markdown':
+                nb_cells.append(NotebookCell(source=c['source'], outputs=[], cell_type='markdown'))  # type: ignore
+            else:
+                cell_outputs = []
+                for o in c.get('outputs', []):
+                    text = ""
+                    if o.get('output_type') == 'stream':
+                        t = o.get('text', '')
+                        text = ''.join(t) if isinstance(t, list) else t
+                    elif o.get('output_type') in ('execute_result', 'display_data'):
+                        t = o.get('data', {}).get('text/plain', '')
+                        text = ''.join(t) if isinstance(t, list) else t
+                    if text.strip():
+                        cell_outputs.append(NotebookCellOutput(
+                            output_type=o.get('output_type', ''), text=text.strip()
+                        ))
+                nb_cells.append(NotebookCell(source=c['source'], outputs=cell_outputs, cell_type='code'))  # type: ignore
 
         # AI grading
         ai_partial_scores = []
@@ -190,7 +215,7 @@ async def grade_student_notebook(
         no_code_reason = None
         if not stu_cells:
             no_code_reason = "문제 마커 없음 — 미제출 처리"
-        elif not stu_code.strip():
+        elif not stu_code_cells:
             no_code_reason = "빈 코드 — 미제출 처리"
 
         # partial_score_criteria가 비어있거나 있으면 모두 AI 채점 시도
@@ -205,8 +230,7 @@ async def grade_student_notebook(
                     problem_description=problem.evaluation_guideline,
                     global_evaluation_guideline=criteria.global_evaluation_guideline,
                     full_score=problem.full_score,
-                    remaining_score=0,  # 이미 working_criteria에 추가했으므로 중복 방지
-                    scoring_mode=problem.scoring_mode
+                    remaining_score=0  # 이미 working_criteria에 추가했으므로 중복 방지
                 )
                 for r in ai_results:
                     ai_partial_scores.append(PartialScoreResult(
@@ -235,10 +259,7 @@ async def grade_student_notebook(
                     reason=reason
                 ))
 
-        if problem.scoring_mode == "deductive":
-            obtained = problem.full_score + sum(ps.score for ps in ai_partial_scores)
-        else:
-            obtained = sum(ps.score for ps in ai_partial_scores)
+        obtained = sum(ps.score for ps in ai_partial_scores)
 
         problem_results.append(ProblemResult(
             problem_id=pid,
@@ -248,6 +269,7 @@ async def grade_student_notebook(
             partial_scores=ai_partial_scores,
             ai_feedback=ai_overall,
             code_cells=nb_cells,
+            preamble_cells=nb_preamble,
             problem_description=problem_description
         ))
 

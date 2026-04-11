@@ -10,6 +10,30 @@ function NotebookPanel({ student }) {
       <div style={nb.body}>
         {student.problems.map(problem => (
           <div key={problem.problem_id} style={nb.problemSection}>
+            {problem.preamble_cells && problem.preamble_cells.length > 0 && (() => {
+              let codeIdx = 0;
+              return problem.preamble_cells.map((cell, idx) => {
+                if (cell.cell_type === 'markdown') {
+                  return <div key={`pre-${idx}`} style={nb.markdownCell}><pre style={nb.markdownText}>{cell.source}</pre></div>;
+                }
+                codeIdx++;
+                return (
+                  <div key={`pre-${idx}`} style={nb.cell}>
+                    <div style={nb.cellIn}>
+                      <span style={nb.cellLabel}>In [{codeIdx}]:</span>
+                      <pre style={nb.code}>{cell.source || '(빈 셀)'}</pre>
+                    </div>
+                    {cell.outputs && cell.outputs.length > 0 && (
+                      <div style={nb.cellOut}>
+                        <span style={nb.cellOutLabel}>Out:</span>
+                        <div style={nb.output}>{cell.outputs.map((o, oi) => <pre key={oi} style={nb.outputText}>{o.text}</pre>)}</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              });
+            })()}
+
             <div style={nb.problemBadge}>
               문제 {problem.problem_id}
             </div>
@@ -20,26 +44,37 @@ function NotebookPanel({ student }) {
               </div>
             )}
 
-            {problem.code_cells && problem.code_cells.length > 0 ? (
-              problem.code_cells.map((cell, idx) => (
-                <div key={idx} style={nb.cell}>
-                  <div style={nb.cellIn}>
-                    <span style={nb.cellLabel}>In [{idx + 1}]:</span>
-                    <pre style={nb.code}>{cell.source || '(빈 셀)'}</pre>
-                  </div>
-                  {cell.outputs && cell.outputs.length > 0 && (
-                    <div style={nb.cellOut}>
-                      <span style={nb.cellOutLabel}>Out:</span>
-                      <div style={nb.output}>
-                        {cell.outputs.map((o, oi) => (
-                          <pre key={oi} style={nb.outputText}>{o.text}</pre>
-                        ))}
-                      </div>
+            {problem.code_cells && problem.code_cells.length > 0 ? (() => {
+              let codeIdx = 0;
+              return problem.code_cells.map((cell, idx) => {
+                if (cell.cell_type === 'markdown') {
+                  return (
+                    <div key={idx} style={nb.markdownCell}>
+                      <pre style={nb.markdownText}>{cell.source}</pre>
                     </div>
-                  )}
-                </div>
-              ))
-            ) : (
+                  );
+                }
+                codeIdx++;
+                return (
+                  <div key={idx} style={nb.cell}>
+                    <div style={nb.cellIn}>
+                      <span style={nb.cellLabel}>In [{codeIdx}]:</span>
+                      <pre style={nb.code}>{cell.source || '(빈 셀)'}</pre>
+                    </div>
+                    {cell.outputs && cell.outputs.length > 0 && (
+                      <div style={nb.cellOut}>
+                        <span style={nb.cellOutLabel}>Out:</span>
+                        <div style={nb.output}>
+                          {cell.outputs.map((o, oi) => (
+                            <pre key={oi} style={nb.outputText}>{o.text}</pre>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              });
+            })() : (
               <div style={nb.empty}>제출된 코드가 없습니다</div>
             )}
           </div>
@@ -228,6 +263,17 @@ const nb = {
   outputText: {
     margin: 0, fontSize: 13, fontFamily: 'monospace',
     color: '#a6e3a1', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+  },
+  markdownCell: {
+    border: '1px solid #45475a', borderRadius: 8,
+    marginBottom: 10, overflow: 'hidden',
+    background: '#2a2a3d',
+  },
+  markdownText: {
+    margin: 0, padding: '10px 14px',
+    fontSize: 13, fontFamily: 'inherit',
+    color: '#f5c2e7', lineHeight: 1.7,
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
   },
   empty: {
     fontSize: 13, color: '#6c7086', padding: '20px',

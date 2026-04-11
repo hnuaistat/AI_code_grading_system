@@ -309,7 +309,7 @@ async def start_grading(
     db: Session = Depends(get_db),
 ):
     answer_bytes = await answer_notebook.read()
-    zip_bytes = await student_zip.read()
+    student_bytes = await student_zip.read()
     criteria_bytes = await criteria_file.read()
 
     try:
@@ -319,12 +319,16 @@ async def start_grading(
         raise HTTPException(status_code=400, detail=f"채점 기준 파일 파싱 오류: {str(e)}")
 
     try:
-        student_notebooks = extract_notebooks_from_zip(zip_bytes)
+        filename = student_zip.filename or ""
+        if filename.lower().endswith('.ipynb'):
+            student_notebooks = [(filename, student_bytes)]
+        else:
+            student_notebooks = extract_notebooks_from_zip(student_bytes)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"ZIP 파일 처리 오류: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"학생 제출물 처리 오류: {str(e)}")
 
     if not student_notebooks:
-        raise HTTPException(status_code=400, detail="ZIP 파일 내에 .ipynb 파일이 없습니다")
+        raise HTTPException(status_code=400, detail="제출물에서 .ipynb 파일을 찾을 수 없습니다")
 
     session_id = str(uuid.uuid4())
     session = GradingSession(
@@ -483,7 +487,7 @@ async def resume_grading(
         raise HTTPException(status_code=400, detail="이어서 채점할 수 없는 세션입니다 (quota_exceeded 상태가 아님)")
 
     answer_bytes = await answer_notebook.read()
-    zip_bytes = await student_zip.read()
+    student_bytes = await student_zip.read()
     criteria_bytes = await criteria_file.read()
 
     try:
@@ -493,9 +497,13 @@ async def resume_grading(
         raise HTTPException(status_code=400, detail=f"채점 기준 파일 파싱 오류: {str(e)}")
 
     try:
-        all_notebooks = extract_notebooks_from_zip(zip_bytes)
+        filename = student_zip.filename or ""
+        if filename.lower().endswith('.ipynb'):
+            all_notebooks = [(filename, student_bytes)]
+        else:
+            all_notebooks = extract_notebooks_from_zip(student_bytes)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"ZIP 파일 처리 오류: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"학생 제출물 처리 오류: {str(e)}")
 
     # 이미 채점된 학생 파일명 수집
     already_done = set()
@@ -793,6 +801,98 @@ async def download_excel(
         headers={"Content-Disposition": f"attachment; filename=grading_results_{session_id[:8]}.xlsx"}
     )
 
+
+
+@app.post("/rubric/parse-notebook")
+async def parse_notebook_rubric(file: UploadFile = File(...)):
+    """
+    노트북 파일(.ipynb)의 마크다운 셀에서 문제를 읽어 JSON 루브릭으로 변환합니다.
+
+    입력: .ipynb 파일
+    - 마크다운 셀에 다음 형식으로 문제 작성:
+      ## Q1. 문제 설명 (총점: 4점)
+      1. 세부 조건 (1점)
+      2. 세부 조건 (점수 표기 없음)
+
+    파싱 결과: evaluation_guideline과 partial_score_criteria로 분류
+    """
+    try:
+        from services.notebook_service import parse_notebook, extract_markdown_cells
+        from utils.markdown_parser import parse_markdown_problems
+
+        content = await file.read()
+        nb = parse_notebook(content)
+        markdown_text = extract_markdown_cells(nb)
+
+        if not markdown_text.strip():
+            raise ValueError("노트북에 마크다운 셀이 없거나 비어있습니다.")
+
+        problems, global_guideline = parse_markdown_problems(markdown_text)
+
+        exam_title = file.filename.replace(".ipynb", "").replace("_", " ")
+
+        return {
+            "exam_title": exam_title,
+            "global_evaluation_guideline": global_guideline,
+            "problems": problems
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"파싱 오류: {str(e)}")
+
+
+@app.post("/rubric/parse-markdown")
+async def parse_markdown_rubric(file: UploadFile = File(...)):
+    """
+    마크다운 파일(.md)을 JSON 루브릭으로 변환합니다.
+
+    입력 형식:
+    ## Q1. 문제 설명 (총점: 4점)
+    1. 세부 조건 (1점)
+    2. 세부 조건 (점수 표기 없음)
+    """
+    try:
+        from utils.markdown_parser import parse_markdown_problems
+
+        content = await file.read()
+        markdown_text = content.decode('utf-8')
+
+        problems, global_guideline = parse_markdown_problems(markdown_text)
+
+        return {
+            "success": True,
+            "filename": file.filename,
+            "count": len(problems),
+            "global_evaluation_guideline": global_guideline,
+            "problems": problems
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"파싱 오류: {str(e)}")
+
+
+@app.post("/rubric/parse-markdown-text")
+async def parse_markdown_text(text: str):
+    """
+    마크다운 텍스트를 JSON 루브릭으로 변환합니다. (텍스트 직접 입력)
+    """
+    try:
+        from utils.markdown_parser import parse_markdown_problems
+
+        problems, global_guideline = parse_markdown_problems(text)
+
+        return {
+            "success": True,
+            "count": len(problems),
+            "global_evaluation_guideline": global_guideline,
+            "problems": problems
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"파싱 오류: {str(e)}")
 
 
 @app.get("/health")

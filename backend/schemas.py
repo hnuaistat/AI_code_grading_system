@@ -70,7 +70,6 @@ class Problem(BaseModel):
     full_score: float
     partial_score_criteria: List[PartialScoreCriterion]
     evaluation_guideline: Optional[str] = None
-    scoring_mode: str = "additive"  # "additive" | "deductive"
 
 
 class GradingCriteria(BaseModel):
@@ -94,6 +93,7 @@ class NotebookCellOutput(BaseModel):
 class NotebookCell(BaseModel):
     source: str
     outputs: List[NotebookCellOutput] = []
+    cell_type: str = "code"
 
 
 class ProblemResult(BaseModel):
@@ -104,6 +104,7 @@ class ProblemResult(BaseModel):
     partial_scores: List[PartialScoreResult]
     ai_feedback: Optional[str] = None
     code_cells: List[NotebookCell] = []
+    preamble_cells: List[NotebookCell] = []
     problem_description: Optional[str] = None
 
 

@@ -140,8 +140,7 @@ async def grade_with_ai(
     execution_output: Optional[str] = None,
     global_evaluation_guideline: Optional[str] = None,
     full_score: Optional[float] = None,
-    remaining_score: Optional[float] = None,
-    scoring_mode: str = "additive"
+    remaining_score: Optional[float] = None
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     GPT-4o를 사용하여 채점 기준 기반 부분 점수 제도로 평가합니다.
@@ -178,16 +177,10 @@ async def grade_with_ai(
         criteria = [PartialScoreCriterion(item="종합 평가", score=full_score)]
 
     # 루브릭을 문자열로 포맷팅
-    if scoring_mode == "deductive":
-        rubric_text = "\n".join([
-            f"- {c.item}: {c.score}점 (감점 항목)"
-            for c in criteria
-        ])
-    else:
-        rubric_text = "\n".join([
-            f"- {c.item}: 최대 {c.score}점"
-            for c in criteria
-        ])
+    rubric_text = "\n".join([
+        f"- {c.item}: 최대 {c.score}점"
+        for c in criteria
+    ])
 
     # 실행 결과 (있으면 포함)
     execution_context = ""
@@ -204,16 +197,7 @@ async def grade_with_ai(
     if remaining_score and remaining_score > 0:
         remaining_info = f"\n\n⚠️ **중요**: 아래 루브릭 항목들의 합계가 {full_score}점보다 작습니다. 아래 점수 항목 외에 **{remaining_score:.1f}점의 추가 배점**이 있으므로, 전체 코드 품질과 학생의 이해도를 종합적으로 평가하여 이 {remaining_score:.1f}점을 추가로 부여하세요."
 
-    if scoring_mode == "deductive":
-        scoring_instruction = """2. **점수 부여 기준** (감점 방식):
-   - 이 문항은 만점에서 시작해 위반 항목을 감점하는 방식입니다.
-   - 위반 없음 → score = 0 (감점 없음)
-   - 위반 있음 → score = 해당 감점값 (반드시 음수, 예: -1.0, -0.5)
-   - 점수를 양수로 바꾸지 마세요. 감점 항목의 score는 반드시 0 이하여야 합니다."""
-        consistency_instruction = "feedback에서 위반이 없다고 했으면 score는 반드시 0이어야 합니다. 위반이 있다고 했으면 score는 반드시 해당 감점값(음수)이어야 합니다."
-        score_field_desc = '"score": "0 (위반 없음) 또는 감점값 (반드시 음수, 예: -1.0, -0.5)"'
-    else:
-        scoring_instruction = """2. **점수 부여 기준**:
+    scoring_instruction = """2. **점수 부여 기준**:
    - **부분점수 항목들** (0점 또는 해당 점수만 - 체크리스트 방식):
      - 항목을 완전히 충족 → 해당 항목의 만점
      - 항목을 충족하지 않음 → 0점 (부분점 없음)
@@ -221,8 +205,8 @@ async def grade_with_ai(
      - 위 항목들 점수 합계 < full_score인 경우, 그 차이를 전체 코드 품질로 자율적으로 부여
      - 코드 구현의 완성도, 효율성, 가독성 등을 종합 평가하여 추가 점수 부여
      - 코드가 에러나면 → 추가 배점 0점"""
-        consistency_instruction = "feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_score와 같아야 합니다."
-        score_field_desc = '"score": "0 또는 max_score만 (예: max_score가 2이면 0 또는 2. 중간값 없음)"'
+    consistency_instruction = "feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_score와 같아야 합니다."
+    score_field_desc = '"score": "0 또는 max_score만 (예: max_score가 2이면 0 또는 2. 중간값 없음)"'
 
     system_prompt = f"""당신은 현업 시니어 개발자이자 꼼꼼한 컴퓨터공학 전공 조교입니다.
 {global_guideline_text}{remaining_info}
@@ -322,10 +306,8 @@ async def grade_with_ai(
             found = rubric_scores[i] if i < len(rubric_scores) else None
             if found:
                 raw_score = float(found.get("score", 0))
-                if scoring_mode == "deductive":
-                    clamped_score = max(c.score, min(0.0, raw_score))
-                else:
-                    clamped_score = max(0.0, min(raw_score, c.score))
+                # 부분점수 없음: 0 또는 max_score만 허용 (50% 이상이면 만점)
+                clamped_score = c.score if raw_score >= c.score * 0.5 else 0.0
                 graded.append({
                     "item": c.item,
                     "max_score": c.score,

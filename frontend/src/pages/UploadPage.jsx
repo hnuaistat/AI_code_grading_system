@@ -117,7 +117,6 @@ function RubricEditor({ rubric, onChange }) {
         problem_id: `Q${nextId}`,
         full_score: 5,
         evaluation_guideline: '',
-        scoring_mode: 'additive',
         partial_score_criteria: [{ item: '출력에 따라 AI가 자율적으로 부여하고 해설을 하시오', score: 5 }]
       }]
     });
@@ -176,8 +175,7 @@ function RubricEditor({ rubric, onChange }) {
       {/* Problems */}
       {rubric.problems.map((problem, pIdx) => {
         const criteriaSum = getCriteriaSum(problem.partial_score_criteria);
-        const isDeductive = problem.scoring_mode === 'deductive';
-        const mismatch = !isDeductive && Math.abs(criteriaSum - (parseFloat(problem.full_score) || 0)) > 0.001;
+        const mismatch = Math.abs(criteriaSum - (parseFloat(problem.full_score) || 0)) > 0.001;
 
         return (
           <div key={pIdx} style={re.problemCard}>
@@ -216,18 +214,6 @@ function RubricEditor({ rubric, onChange }) {
               />
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <label style={re.smallLabel}>채점 방식</label>
-              <select
-                value={problem.scoring_mode || 'additive'}
-                onChange={e => updateProblem(pIdx, 'scoring_mode', e.target.value)}
-                style={{ fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #d1d5db' }}
-              >
-                <option value="additive">가점 방식 (~ 하면 득점)</option>
-                <option value="deductive">감점 방식 (~ 안 하면 감점)</option>
-              </select>
-            </div>
-
             <div style={re.criteriaSection}>
               <div style={re.criteriaHeader}>
                 <span style={re.smallLabel}>부분 점수 항목</span>
@@ -250,7 +236,7 @@ function RubricEditor({ rubric, onChange }) {
                     style={re.criteriaScoreInput}
                     type="number"
                     step="0.25"
-                    min={isDeductive ? undefined : "0"}
+                    min="0"
                     value={c.score ?? 0}
                     onChange={e => updateCriteria(pIdx, cIdx, 'score', e.target.value)}
                     onBlur={e => updateCriteria(pIdx, cIdx, 'score', parseFloat(e.target.value) || 0)}
@@ -433,7 +419,7 @@ export default function UploadPage() {
     }
   };
 
-  /* Step 1: AI 루브릭 생성 */
+  /* Step 1: 노트북 파싱으로 루브릭 생성 */
   const handleGenerateRubric = async () => {
     if (!answerFile) {
       setError('정답 노트북을 업로드해주세요');
@@ -444,14 +430,12 @@ export default function UploadPage() {
     setStep(1);
     try {
       const fd = new FormData();
-      fd.append('answer_notebook', answerFile);
-      fd.append('total_score', 100);
-      fd.append('exam_title', '');
-      const res = await gradingAPI.generateRubric(fd);
+      fd.append('file', answerFile);
+      const res = await gradingAPI.parseNotebook(fd);
       setRubric(res.data);
       setStep(2);
     } catch (err) {
-      const detail = err.response?.data?.detail || 'AI 루브릭 생성에 실패했습니다';
+      const detail = err.response?.data?.detail || '루브릭 파싱에 실패했습니다';
       setError(detail);
       setStep(0);
     } finally {
@@ -672,13 +656,13 @@ export default function UploadPage() {
         {step === 0 && (
           <div style={s.card}>
             <h2 style={s.cardTitle}>파일 업로드</h2>
-            <p style={s.cardDesc}>정답 노트북과 학생 제출물 ZIP 파일을 업로드해주세요</p>
+            <p style={s.cardDesc}>정답 노트북과 학생 제출물을 업로드해주세요</p>
 
             <div style={s.grid2}>
               <DropZone label="정답 노트북" icon="📝" accept={{ 'application/x-ipynb+json': ['.ipynb'] }}
                 onDrop={([f]) => setAnswerFile(f)} file={answerFile} />
-              <DropZone label="학생 제출물 (ZIP)" icon="📦"
-                accept={{ 'application/zip': ['.zip'], 'application/x-zip-compressed': ['.zip'] }}
+              <DropZone label="학생 제출물 (ZIP / ipynb)" icon="📦"
+                accept={{ 'application/zip': ['.zip'], 'application/x-zip-compressed': ['.zip'], 'application/x-ipynb+json': ['.ipynb'] }}
                 onDrop={([f]) => setZipFile(f)} file={zipFile} />
             </div>
 
@@ -693,7 +677,7 @@ export default function UploadPage() {
                   input.accept = '.json';
                   input.onchange = (e) => {
                     if (e.target.files[0]) {
-                      if (!zipFile) { setError('학생 제출물 ZIP 파일을 먼저 업로드해주세요'); return; }
+                      if (!zipFile) { setError('학생 제출물 파일을 먼저 업로드해주세요'); return; }
                       handleRubricFileUpload(e.target.files[0]);
                     }
                   };

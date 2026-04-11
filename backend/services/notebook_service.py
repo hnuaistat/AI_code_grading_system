@@ -32,6 +32,27 @@ def parse_notebook(content: bytes) -> nbformat.NotebookNode:
     return nbformat.reads(nb_str, as_version=4)
 
 
+def extract_markdown_cells(nb: nbformat.NotebookNode) -> str:
+    """
+    노트북에서 문제 부분(## Q로 시작하는 마크다운 셀)만 추출합니다.
+    여러 마크다운 셀에 걸쳐 있을 수 있으므로, "## Q"로 시작하는 내용들을 모두 수집합니다.
+    """
+    problems_content = []
+
+    for cell in nb.cells:
+        if cell.cell_type == 'markdown':
+            source = cell.get('source', '')
+            if isinstance(source, list):
+                source = ''.join(source)
+
+            source = source.strip()
+            # "## Q" 또는 "## 문제"로 시작하는 셀, 그리고 "# 전체 공통 채점 가이드라인" 셀 수집
+            if source.startswith('## Q') or source.startswith('## 문제') or source.startswith('# 전체 공통 채점 가이드라인'):
+                problems_content.append(source)
+
+    return '\n\n'.join(problems_content)
+
+
 def extract_cell_outputs(nb: nbformat.NotebookNode) -> List[Dict[str, Any]]:
     """각 코드 셀의 출력값 추출."""
     cell_outputs = []
@@ -137,6 +158,8 @@ def split_notebook_by_problems(nb: nbformat.NotebookNode) -> Dict[int, Dict[str,
             break
 
     problems: Dict[int, Dict[str, Any]] = {}
+    preamble_cells: List[Dict[str, Any]] = []  # 첫 문제 이전 셀들
+    GLOBAL_GUIDELINE_RE = re.compile(r'전체\s*공통\s*채점\s*가이드라인')
     current_problem = 0
     problem_cells: List[Dict[str, Any]] = []
     problem_description = ""
@@ -161,7 +184,7 @@ def split_notebook_by_problems(nb: nbformat.NotebookNode) -> Dict[int, Dict[str,
                         problem_cells = []
                         problem_description = src.strip()
                     else:
-                        # 레벨1인데 문제 번호 없음 → 섹션 구분자, current_problem 리셋
+                        # 레벨1인데 문제 번호 없음 → 섹션 구분자
                         if current_problem > 0:
                             problems[current_problem] = {
                                 'description': problem_description,
@@ -170,26 +193,42 @@ def split_notebook_by_problems(nb: nbformat.NotebookNode) -> Dict[int, Dict[str,
                             problem_cells = []
                             problem_description = ""
                             current_problem = 0
+                        elif src.strip() and not GLOBAL_GUIDELINE_RE.search(src):
+                            # 첫 문제 이전 마크다운 → preamble
+                            preamble_cells.append({'source': src, 'outputs': [], 'cell_type': 'markdown'})
                     continue
 
                 if LEVEL2_RE.match(first_line):
                     # 소문제(## 1, ## 2 등) → 현재 문제 설명에 누적
                     if current_problem > 0:
                         problem_description += "\n\n" + src.strip()
+                        # 문제 마커(Q/문제 번호) 포함 셀은 표시 제외 (이미 problem_description에 반영됨)
+                        if not PROBLEM_RE.search(first_line):
+                            problem_cells.append({'source': src, 'outputs': [], 'cell_type': 'markdown'})
                     continue
 
-                # - 로 시작하는 설명/지시사항 → 현재 문제 설명에 누적
+                # 그 외 마크다운 → 학생 답변 등, 설명에 누적 + 표시용 셀로도 저장
                 if current_problem > 0:
                     problem_description += "\n\n" + src.strip()
+                    if not PROBLEM_RE.search(src):
+                        problem_cells.append({'source': src, 'outputs': [], 'cell_type': 'markdown'})
                 continue
 
             elif cell.cell_type == 'code':
                 src = _get_source(cell)
-                if src.strip() and current_problem > 0:
-                    problem_cells.append({
-                        'source': src,
-                        'outputs': cell.get('outputs', [])
-                    })
+                if src.strip():
+                    if current_problem > 0:
+                        problem_cells.append({
+                            'source': src,
+                            'outputs': cell.get('outputs', []),
+                            'cell_type': 'code'
+                        })
+                    else:
+                        preamble_cells.append({
+                            'source': src,
+                            'outputs': cell.get('outputs', []),
+                            'cell_type': 'code'
+                        })
 
     else:
         # 폴백: 레벨2+ 마커 우선, 그것도 없으면 모든 레벨 탐색
@@ -215,6 +254,8 @@ def split_notebook_by_problems(nb: nbformat.NotebookNode) -> Dict[int, Dict[str,
                             problem_cells = []
                             problem_description = ""
                             current_problem = 0
+                        elif src.strip() and not GLOBAL_GUIDELINE_RE.search(src):
+                            preamble_cells.append({'source': src, 'outputs': [], 'cell_type': 'markdown'})
                         continue
 
                     if LEVEL2_RE.match(first_line):
@@ -239,20 +280,36 @@ def split_notebook_by_problems(nb: nbformat.NotebookNode) -> Dict[int, Dict[str,
                         current_problem = int(m.group(1))
                         problem_cells = []
                         problem_description = src.strip()
+                        continue  # 문제 헤더는 problem_cells에 추가하지 않음
+
+                # 문제 마커 없는 마크다운만 표시용 셀로 저장
+                if current_problem > 0 and not PROBLEM_RE.search(src):
+                    problem_cells.append({'source': src, 'outputs': [], 'cell_type': 'markdown'})
                 continue
 
             elif cell.cell_type == 'code':
                 src = _get_source(cell)
-                if src.strip() and current_problem > 0:
-                    problem_cells.append({
-                        'source': src,
-                        'outputs': cell.get('outputs', [])
-                    })
+                if src.strip():
+                    if current_problem > 0:
+                        problem_cells.append({
+                            'source': src,
+                            'outputs': cell.get('outputs', []),
+                            'cell_type': 'code'
+                        })
+                    else:
+                        preamble_cells.append({
+                            'source': src,
+                            'outputs': cell.get('outputs', []),
+                            'cell_type': 'code'
+                        })
 
     if current_problem > 0 and problem_cells:
         problems[current_problem] = {
             'description': problem_description,
             'cells': problem_cells
         }
+
+    if preamble_cells:
+        problems[0] = {'description': '', 'cells': preamble_cells}
 
     return problems
