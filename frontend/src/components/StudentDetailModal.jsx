@@ -26,7 +26,14 @@ function NotebookPanel({ student }) {
                     {cell.outputs && cell.outputs.length > 0 && (
                       <div style={nb.cellOut}>
                         <span style={nb.cellOutLabel}>Out:</span>
-                        <div style={nb.output}>{cell.outputs.map((o, oi) => <pre key={oi} style={nb.outputText}>{o.text}</pre>)}</div>
+                        <div style={nb.output}>{cell.outputs.map((o, oi) => (
+                          <React.Fragment key={oi}>
+                            {o.output_type === 'error'
+                              ? <pre style={nb.errorText}>{o.text}</pre>
+                              : o.text && <pre style={nb.outputText}>{o.text}</pre>}
+                            {o.image && <img src={`data:image/png;base64,${o.image}`} alt="output" style={nb.outputImage} />}
+                          </React.Fragment>
+                        ))}</div>
                       </div>
                     )}
                   </div>
@@ -66,7 +73,12 @@ function NotebookPanel({ student }) {
                         <span style={nb.cellOutLabel}>Out:</span>
                         <div style={nb.output}>
                           {cell.outputs.map((o, oi) => (
-                            <pre key={oi} style={nb.outputText}>{o.text}</pre>
+                            <React.Fragment key={oi}>
+                              {o.output_type === 'error'
+                                ? <pre style={nb.errorText}>{o.text}</pre>
+                                : o.text && <pre style={nb.outputText}>{o.text}</pre>}
+                              {o.image && <img src={`data:image/png;base64,${o.image}`} alt="output" style={nb.outputImage} />}
+                            </React.Fragment>
                           ))}
                         </div>
                       </div>
@@ -109,13 +121,17 @@ function FeedbackPanel({ student }) {
           const pRatio = problem.full_score > 0
             ? problem.obtained_score / problem.full_score
             : 0;
-          const barColor = pRatio >= 0.8 ? '#059669' : pRatio >= 0.5 ? '#d97706' : '#dc2626';
+          const isFullScore = pRatio >= 1.0;
+          const isZero = problem.obtained_score === 0;
+          const statusColor = isFullScore ? '#059669' : isZero ? '#dc2626' : '#d97706';
+          const statusBg = isFullScore ? '#f0fdf4' : isZero ? '#fef2f2' : '#fffbeb';
+          const statusBorder = isFullScore ? '#bbf7d0' : isZero ? '#fecaca' : '#fde68a';
 
           return (
-            <div key={problem.problem_id} style={fb.problem}>
-              <div style={fb.problemHeader}>
+            <div key={problem.problem_id} style={{ ...fb.problem, borderColor: statusBorder, borderLeftWidth: 4, borderLeftColor: statusColor }}>
+              <div style={{ ...fb.problemHeader, background: statusBg, borderBottomColor: statusBorder }}>
                 <span style={fb.problemTitle}>문제 {problem.problem_id}</span>
-                <span style={{ ...fb.problemScore, color: barColor }}>
+                <span style={{ ...fb.problemScore, color: statusColor }}>
                   {problem.obtained_score.toFixed(2)} / {problem.full_score}점
                 </span>
               </div>
@@ -125,7 +141,7 @@ function FeedbackPanel({ student }) {
                 </div>
               )}
               <div style={fb.progressBar}>
-                <div style={{ ...fb.progressFill, width: `${pRatio * 100}%`, background: barColor }} />
+                <div style={{ ...fb.progressFill, width: `${pRatio * 100}%`, background: statusColor }} />
               </div>
 
               <div style={fb.criteriaList}>
@@ -263,6 +279,16 @@ const nb = {
   outputText: {
     margin: 0, fontSize: 13, fontFamily: 'monospace',
     color: '#a6e3a1', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+  },
+  outputImage: {
+    maxWidth: '100%', borderRadius: 4, marginTop: 4,
+    background: '#fff',
+  },
+  errorText: {
+    margin: 0, fontSize: 13, fontFamily: 'monospace',
+    color: '#f38ba8', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+    background: '#302030', borderRadius: 4, padding: '8px 10px',
+    borderLeft: '3px solid #f38ba8',
   },
   markdownCell: {
     border: '1px solid #45475a', borderRadius: 8,

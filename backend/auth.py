@@ -64,3 +64,13 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
     return {"id": user.id, "username": user.username, "email": user.email, "role": user.role}
+
+
+async def require_admin(current_user=Depends(get_current_user)):
+    """관리자 권한 확인 미들웨어."""
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="관리자 권한이 필요합니다",
+        )
+    return current_user

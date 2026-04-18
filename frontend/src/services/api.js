@@ -49,4 +49,14 @@ export const gradingAPI = {
   getHistory: () => API.get('/grading/history'),
 };
 
+export const adminAPI = {
+  getStats: () => API.get('/admin/stats'),
+  getUsers: () => API.get('/admin/users'),
+  updateUser: (userId, data) => API.put(`/admin/users/${userId}`, data),
+  deleteUser: (userId) => API.delete(`/admin/users/${userId}`),
+  getSettings: () => API.get('/admin/settings'),
+  updateSettings: (data) => API.put('/admin/settings', data),
+  getSessions: () => API.get('/admin/sessions'),
+};
+
 export default API;

@@ -88,6 +88,7 @@ class PartialScoreResult(BaseModel):
 class NotebookCellOutput(BaseModel):
     output_type: str
     text: str
+    image: Optional[str] = None  # base64 인코딩된 이미지 (image/png)
 
 
 class NotebookCell(BaseModel):

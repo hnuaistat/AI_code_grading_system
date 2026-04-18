@@ -22,7 +22,7 @@ import models
 from database import engine, SessionLocal, get_db
 from auth import (
     authenticate_user, create_access_token, get_current_user,
-    get_password_hash, ACCESS_TOKEN_EXPIRE_MINUTES
+    get_password_hash, ACCESS_TOKEN_EXPIRE_MINUTES, require_admin
 )
 from schemas import (
     Token, LoginRequest, RegisterRequest, GradingCriteria, GradingSession,
@@ -57,6 +57,13 @@ def seed_database():
     try:
         seed_users = [
             {
+                "username": "admin",
+                "email": "admin@univ.ac.kr",
+                "password": "admin123123",
+                "role": "admin",
+                "subjects": [],
+            },
+            {
                 "username": "professor",
                 "email": "professor@univ.ac.kr",
                 "password": "secret",
@@ -84,6 +91,19 @@ def seed_database():
                 db.flush()
                 for name, code in u["subjects"]:
                     db.add(models.Subject(name=name, code=code, user_id=user.id))
+        db.commit()
+
+        # 기본 시스템 설정 시드
+        default_settings = {
+            "openai_api_key": os.getenv("OPENAI_API_KEY", ""),
+            "llm_model": "gpt-4o-mini",
+            "base_system_prompt": "",
+            "max_upload_size_mb": "50",
+        }
+        for key, value in default_settings.items():
+            existing = db.query(models.SystemSetting).filter(models.SystemSetting.key == key).first()
+            if not existing:
+                db.add(models.SystemSetting(key=key, value=value))
         db.commit()
     finally:
         db.close()
@@ -396,10 +416,11 @@ async def run_grading_session(
     total = len(student_notebooks)
 
     quota_exceeded = False
+    session_total_tokens = 0
     for i, (filename, content) in enumerate(student_notebooks):
         session.current_student = filename
         try:
-            problem_results, error = await grade_student_notebook(
+            problem_results, error, student_tokens = await grade_student_notebook(
                 student_nb_content=content,
                 answer_nb_content=answer_bytes,
                 criteria=criteria,
@@ -421,6 +442,7 @@ async def run_grading_session(
                 error=error
             )
             session.results.append(student_result)
+            session_total_tokens += student_tokens
         except APIQuotaError:
             quota_exceeded = True
             session.processed_students = i
@@ -463,6 +485,7 @@ async def run_grading_session(
             db_record.processed_students = session.processed_students
             db_record.results_json = json.dumps(results_data, ensure_ascii=False)
             db_record.error = session.error
+            db_record.tokens_used = (db_record.tokens_used or 0) + session_total_tokens
             if not quota_exceeded:
                 db_record.completed_at = datetime.utcnow()
             db.commit()
@@ -898,3 +921,196 @@ async def parse_markdown_text(text: str):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ─── Admin ────────────────────────────────────────────────────────────────────
+
+@app.get("/admin/stats")
+async def admin_stats(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """시스템 전체 통계."""
+    from sqlalchemy import func
+
+    total_users = db.query(models.User).count()
+    total_sessions = db.query(models.GradingSessionDB).count()
+    completed_sessions = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.status == "completed"
+    ).count()
+    running_sessions = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.status == "running"
+    ).count()
+
+    total_students_graded = db.query(func.sum(models.GradingSessionDB.processed_students)).scalar() or 0
+    total_tokens_used = db.query(func.sum(models.GradingSessionDB.tokens_used)).scalar() or 0
+
+    # 최근 7일 세션 수
+    from datetime import datetime, timedelta
+    week_ago = datetime.utcnow() - timedelta(days=7)
+    recent_sessions = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.created_at >= week_ago
+    ).count()
+
+    # 사용자별 통계
+    user_stats = []
+    users = db.query(models.User).all()
+    for u in users:
+        session_count = db.query(models.GradingSessionDB).filter(
+            models.GradingSessionDB.user_id == u.id
+        ).count()
+        subject_count = db.query(models.Subject).filter(
+            models.Subject.user_id == u.id
+        ).count()
+        user_stats.append({
+            "id": u.id,
+            "username": u.username,
+            "role": u.role,
+            "sessions": session_count,
+            "subjects": subject_count,
+        })
+
+    return {
+        "total_users": total_users,
+        "total_sessions": total_sessions,
+        "completed_sessions": completed_sessions,
+        "running_sessions": running_sessions,
+        "total_students_graded": total_students_graded,
+        "total_tokens_used": total_tokens_used,
+        "recent_sessions_7d": recent_sessions,
+        "user_stats": user_stats,
+    }
+
+
+@app.get("/admin/users")
+async def admin_list_users(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """전체 사용자 목록."""
+    users = db.query(models.User).order_by(models.User.created_at).all()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "email": u.email,
+            "role": u.role,
+            "created_at": u.created_at.isoformat() if u.created_at else "",
+        }
+        for u in users
+    ]
+
+
+@app.put("/admin/users/{user_id}")
+async def admin_update_user(
+    user_id: int,
+    body: dict,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """사용자 역할 변경 / 비밀번호 초기화."""
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    if "role" in body:
+        if body["role"] not in ("admin", "professor", "ta", "student"):
+            raise HTTPException(status_code=400, detail="유효하지 않은 역할입니다")
+        user.role = body["role"]
+
+    if "password" in body:
+        if len(body["password"]) < 6:
+            raise HTTPException(status_code=400, detail="비밀번호는 6자 이상이어야 합니다")
+        user.hashed_password = get_password_hash(body["password"])
+
+    db.commit()
+    return {"message": "사용자 정보가 업데이트되었습니다"}
+
+
+@app.delete("/admin/users/{user_id}")
+async def admin_delete_user(
+    user_id: int,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """사용자 삭제."""
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    if user.role == "admin":
+        raise HTTPException(status_code=400, detail="관리자 계정은 삭제할 수 없습니다")
+
+    db.delete(user)
+    db.commit()
+    return {"message": "사용자가 삭제되었습니다"}
+
+
+@app.get("/admin/settings")
+async def admin_get_settings(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """시스템 설정 조회."""
+    settings = db.query(models.SystemSetting).all()
+    result = {}
+    for s in settings:
+        # API 키는 마스킹하여 반환
+        if "api_key" in s.key and s.value:
+            masked = s.value[:8] + "..." + s.value[-4:] if len(s.value) > 12 else "***"
+            result[s.key] = masked
+        else:
+            result[s.key] = s.value
+    return result
+
+
+@app.put("/admin/settings")
+async def admin_update_settings(
+    body: dict,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """시스템 설정 업데이트."""
+    allowed_keys = {"openai_api_key", "llm_model", "base_system_prompt", "max_upload_size_mb"}
+    for key, value in body.items():
+        if key not in allowed_keys:
+            continue
+        setting = db.query(models.SystemSetting).filter(models.SystemSetting.key == key).first()
+        if setting:
+            setting.value = str(value)
+        else:
+            db.add(models.SystemSetting(key=key, value=str(value)))
+
+        # API 키가 변경되면 환경변수도 업데이트
+        if key == "openai_api_key" and value:
+            os.environ["OPENAI_API_KEY"] = str(value)
+
+    db.commit()
+    return {"message": "설정이 저장되었습니다"}
+
+
+@app.get("/admin/sessions")
+async def admin_list_sessions(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """전체 채점 세션 목록 (모든 사용자)."""
+    records = (
+        db.query(models.GradingSessionDB)
+        .order_by(models.GradingSessionDB.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    result = []
+    for r in records:
+        user = db.query(models.User).filter(models.User.id == r.user_id).first()
+        result.append({
+            "session_id": r.id,
+            "username": user.username if user else "unknown",
+            "subject_name": r.subject.name if r.subject else None,
+            "status": r.status,
+            "total_students": r.total_students,
+            "processed_students": r.processed_students,
+            "created_at": r.created_at.isoformat() if r.created_at else "",
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+        })
+    return result

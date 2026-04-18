@@ -13,6 +13,11 @@ from services.notebook_service import (
 from services.llm_service import grade_with_ai, APIQuotaError
 
 
+def strip_ansi(text: str) -> str:
+    """ANSI 이스케이프 코드 제거."""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
+
+
 def normalize_output(text: str) -> str:
     """출력값 정규화: 공백/줄바꿈 정리"""
     if not text:
@@ -105,6 +110,7 @@ async def grade_student_notebook(
     student_cell_outputs = extract_cell_outputs(student_nb)
 
     problem_results = []
+    total_tokens = 0
     # 첫 문제 이전 공통 셀 (# 데이터 불러오기 + 패키지 임포트 등)
     stu_preamble_cells = student_problems.get(0, {}).get('cells', [])
     is_first_problem = True
@@ -180,14 +186,28 @@ async def grade_student_notebook(
                     cell_outputs = []
                     for o in c.get('outputs', []):
                         text = ""
-                        if o.get('output_type') == 'stream':
+                        image = None
+                        otype = o.get('output_type', '')
+                        if otype == 'stream':
                             t = o.get('text', '')
                             text = ''.join(t) if isinstance(t, list) else t
-                        elif o.get('output_type') in ('execute_result', 'display_data'):
-                            t = o.get('data', {}).get('text/plain', '')
+                        elif otype in ('execute_result', 'display_data'):
+                            data = o.get('data', {})
+                            t = data.get('text/plain', '')
                             text = ''.join(t) if isinstance(t, list) else t
-                        if text.strip():
-                            cell_outputs.append(NotebookCellOutput(output_type=o.get('output_type', ''), text=text.strip()))
+                            img = data.get('image/png', '')
+                            if img:
+                                image = ''.join(img) if isinstance(img, list) else img
+                        elif otype == 'error':
+                            ename = o.get('ename', '')
+                            evalue = o.get('evalue', '')
+                            tb = o.get('traceback', [])
+                            tb_text = strip_ansi('\n'.join(tb)) if tb else ''
+                            text = f"{ename}: {evalue}\n{tb_text}" if tb_text else f"{ename}: {evalue}"
+                        if text.strip() or image:
+                            cell_outputs.append(NotebookCellOutput(
+                                output_type=otype, text=text.strip(), image=image
+                            ))
                     nb_preamble.append(NotebookCell(source=c['source'], outputs=cell_outputs, cell_type='code'))  # type: ignore
             is_first_problem = False
         for c in stu_cells:
@@ -197,17 +217,39 @@ async def grade_student_notebook(
                 cell_outputs = []
                 for o in c.get('outputs', []):
                     text = ""
-                    if o.get('output_type') == 'stream':
+                    image = None
+                    otype = o.get('output_type', '')
+                    if otype == 'stream':
                         t = o.get('text', '')
                         text = ''.join(t) if isinstance(t, list) else t
-                    elif o.get('output_type') in ('execute_result', 'display_data'):
-                        t = o.get('data', {}).get('text/plain', '')
+                    elif otype in ('execute_result', 'display_data'):
+                        data = o.get('data', {})
+                        t = data.get('text/plain', '')
                         text = ''.join(t) if isinstance(t, list) else t
-                    if text.strip():
+                        img = data.get('image/png', '')
+                        if img:
+                            image = ''.join(img) if isinstance(img, list) else img
+                    elif otype == 'error':
+                        ename = o.get('ename', '')
+                        evalue = o.get('evalue', '')
+                        tb = o.get('traceback', [])
+                        tb_text = strip_ansi('\n'.join(tb)) if tb else ''
+                        text = f"{ename}: {evalue}\n{tb_text}" if tb_text else f"{ename}: {evalue}"
+                    if text.strip() or image:
                         cell_outputs.append(NotebookCellOutput(
-                            output_type=o.get('output_type', ''), text=text.strip()
+                            output_type=otype, text=text.strip(), image=image
                         ))
                 nb_cells.append(NotebookCell(source=c['source'], outputs=cell_outputs, cell_type='code'))  # type: ignore
+
+        # 학생 셀에서 에러 출력 수집 → LLM에 전달
+        error_outputs = []
+        for c in stu_code_cells:
+            for o in c.get('outputs', []):
+                if o.get('output_type') == 'error':
+                    ename = o.get('ename', '')
+                    evalue = o.get('evalue', '')
+                    error_outputs.append(f"{ename}: {evalue}")
+        execution_output_text = "\n".join(error_outputs) if error_outputs else None
 
         # AI grading
         ai_partial_scores = []
@@ -222,16 +264,18 @@ async def grade_student_notebook(
         if no_code_reason is None:
             await asyncio.sleep(1)
             try:
-                ai_results, ai_overall = await grade_with_ai(
+                ai_results, ai_overall, problem_tokens = await grade_with_ai(
                     student_code=stu_code,
                     answer_code=ans_code,
                     criteria=working_criteria,
                     problem_id=pid,
                     problem_description=problem.evaluation_guideline,
+                    execution_output=execution_output_text,
                     global_evaluation_guideline=criteria.global_evaluation_guideline,
                     full_score=problem.full_score,
                     remaining_score=0  # 이미 working_criteria에 추가했으므로 중복 방지
                 )
+                total_tokens += problem_tokens
                 for r in ai_results:
                     ai_partial_scores.append(PartialScoreResult(
                         item=r['item'],
@@ -273,4 +317,4 @@ async def grade_student_notebook(
             problem_description=problem_description
         ))
 
-    return problem_results, execution_error
+    return problem_results, execution_error, total_tokens

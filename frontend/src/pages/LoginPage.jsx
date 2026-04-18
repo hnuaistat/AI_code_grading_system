@@ -22,7 +22,7 @@ export default function LoginPage() {
       localStorage.setItem('token', token);
       const meRes = await authAPI.me();
       login(token, meRes.data);
-      navigate('/upload');
+      navigate(meRes.data.role === 'admin' ? '/admin' : '/upload');
     } catch (err) {
       setError(err.response?.data?.detail || '로그인에 실패했습니다');
     } finally {
@@ -68,6 +68,7 @@ export default function LoginPage() {
         </form>
         <div style={styles.hint}>
           <p style={{ color: '#94a3b8', fontSize: 13 }}>기본 계정: professor / secret</p>
+          <p style={{ color: '#f59e0b', fontSize: 12, marginTop: 4 }}>관리자: admin / admin123123</p>
           <div style={{ marginTop: 12, borderTop: '1px solid #f1f5f9', paddingTop: 12 }}>
             <span style={{ color: '#94a3b8', fontSize: 13 }}>처음 사용하시나요? </span>
             <a href="/register" style={{ color: '#000000ff', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>

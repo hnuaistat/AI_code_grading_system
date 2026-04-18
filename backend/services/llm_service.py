@@ -141,7 +141,7 @@ async def grade_with_ai(
     global_evaluation_guideline: Optional[str] = None,
     full_score: Optional[float] = None,
     remaining_score: Optional[float] = None
-) -> Tuple[List[Dict[str, Any]], str]:
+) -> Tuple[List[Dict[str, Any]], str, int]:
     """
     GPT-4o를 사용하여 채점 기준 기반 부분 점수 제도로 평가합니다.
 
@@ -168,7 +168,7 @@ async def grade_with_ai(
                 "score": 0,
                 "reason": "제출된 코드가 없습니다."
             }]
-        return results, "코드가 제출되지 않았습니다."
+        return results, "코드가 제출되지 않았습니다.", 0
 
     # criteria가 비어있으면 full_score 기반으로 자율 평가 항목 생성
     if not criteria:
@@ -185,7 +185,7 @@ async def grade_with_ai(
     # 실행 결과 (있으면 포함)
     execution_context = ""
     if execution_output:
-        execution_context = f"\n\n[코드 실행 결과]\n{execution_output}"
+        execution_context = f"\n\n## ⚠️ 코드 실행 시 발생한 에러\n```\n{execution_output}\n```\n위 에러가 실행 중 실제로 발생했습니다. 전체 공통 채점 가이드라인의 에러 관련 규칙을 반드시 적용하세요."
 
     # 전체 공통 가이드라인 (있으면 포함)
     global_guideline_text = ""
@@ -286,6 +286,7 @@ async def grade_with_ai(
         ))
 
         content = response.choices[0].message.content
+        tokens_used = response.usage.total_tokens if response.usage else 0
 
         # JSON 파싱 (마크다운 코드블록 제거)
         content = content.strip()
@@ -322,7 +323,7 @@ async def grade_with_ai(
                     "reason": "채점 항목 누락"
                 })
 
-        return graded, overall_feedback
+        return graded, overall_feedback, tokens_used
 
     except json.JSONDecodeError as e:
         return [
@@ -333,7 +334,7 @@ async def grade_with_ai(
                 "reason": f"AI 응답 파싱 오류: {str(e)}"
             }
             for c in criteria
-        ], f"AI 평가 중 응답 형식 오류: {str(e)}"
+        ], f"AI 평가 중 응답 형식 오류: {str(e)}", 0
 
     except APIQuotaError:
         raise
@@ -347,4 +348,4 @@ async def grade_with_ai(
                 "reason": f"AI 채점 오류: {str(e)}"
             }
             for c in criteria
-        ], f"AI 채점 중 오류 발생: {str(e)}"
+        ], f"AI 채점 중 오류 발생: {str(e)}", 0
