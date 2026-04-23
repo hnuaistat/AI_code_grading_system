@@ -5,6 +5,7 @@ import RegisterPage from './pages/RegisterPage';
 import UploadPage from './pages/UploadPage';
 import DashboardPage from './pages/DashboardPage';
 import HistoryPage from './pages/HistoryPage';
+import AdminPage from './pages/AdminPage';
 import { authAPI } from './services/api';
 
 export const AuthContext = createContext(null);
@@ -14,6 +15,13 @@ export function useAuth() { return useContext(AuthContext); }
 function PrivateRoute({ children }) {
   const { user } = useAuth();
   return user ? children : <Navigate to="/login" replace />;
+}
+
+function AdminRoute({ children }) {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== 'admin') return <Navigate to="/upload" replace />;
+  return children;
 }
 
 export default function App() {
@@ -53,10 +61,11 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
           <Route path="/upload" element={<PrivateRoute><UploadPage /></PrivateRoute>} />
           <Route path="/history" element={<PrivateRoute><HistoryPage /></PrivateRoute>} />
           <Route path="/dashboard/:sessionId" element={<PrivateRoute><DashboardPage /></PrivateRoute>} />
-          <Route path="*" element={<Navigate to={user ? "/upload" : "/login"} replace />} />
+          <Route path="*" element={<Navigate to={user ? (user.role === 'admin' ? "/admin" : "/upload") : "/login"} replace />} />
         </Routes>
       </BrowserRouter>
     </AuthContext.Provider>

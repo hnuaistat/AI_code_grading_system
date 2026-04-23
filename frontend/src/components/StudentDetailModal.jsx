@@ -10,37 +10,83 @@ function NotebookPanel({ student }) {
       <div style={nb.body}>
         {student.problems.map(problem => (
           <div key={problem.problem_id} style={nb.problemSection}>
+            {problem.preamble_cells && problem.preamble_cells.length > 0 && (() => {
+              let codeIdx = 0;
+              return problem.preamble_cells.map((cell, idx) => {
+                if (cell.cell_type === 'markdown') {
+                  return <div key={`pre-${idx}`} style={nb.markdownCell}><pre style={nb.markdownText}>{cell.source}</pre></div>;
+                }
+                codeIdx++;
+                return (
+                  <div key={`pre-${idx}`} style={nb.cell}>
+                    <div style={nb.cellIn}>
+                      <span style={nb.cellLabel}>In [{codeIdx}]:</span>
+                      <pre style={nb.code}>{cell.source || '(빈 셀)'}</pre>
+                    </div>
+                    {cell.outputs && cell.outputs.length > 0 && (
+                      <div style={nb.cellOut}>
+                        <span style={nb.cellOutLabel}>Out:</span>
+                        <div style={nb.output}>{cell.outputs.map((o, oi) => (
+                          <React.Fragment key={oi}>
+                            {o.output_type === 'error'
+                              ? <pre style={nb.errorText}>{o.text}</pre>
+                              : o.text && <pre style={nb.outputText}>{o.text}</pre>}
+                            {o.image && <img src={`data:image/png;base64,${o.image}`} alt="output" style={nb.outputImage} />}
+                          </React.Fragment>
+                        ))}</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              });
+            })()}
+
             <div style={nb.problemBadge}>
               문제 {problem.problem_id}
-              <span style={{
-                ...nb.matchBadge,
-                background: problem.output_match ? '#dcfce7' : '#fef9c3',
-                color: problem.output_match ? '#16a34a' : '#b45309',
-              }}>
-                {problem.output_match ? '✓ 출력 일치' : '△ 출력 불일치'}
-              </span>
             </div>
 
-            {problem.code_cells && problem.code_cells.length > 0 ? (
-              problem.code_cells.map((cell, idx) => (
-                <div key={idx} style={nb.cell}>
-                  <div style={nb.cellIn}>
-                    <span style={nb.cellLabel}>In [{idx + 1}]:</span>
-                    <pre style={nb.code}>{cell.source || '(빈 셀)'}</pre>
-                  </div>
-                  {cell.outputs && cell.outputs.length > 0 && (
-                    <div style={nb.cellOut}>
-                      <span style={nb.cellOutLabel}>Out:</span>
-                      <div style={nb.output}>
-                        {cell.outputs.map((o, oi) => (
-                          <pre key={oi} style={nb.outputText}>{o.text}</pre>
-                        ))}
-                      </div>
+            {problem.problem_description && (
+              <div style={nb.problemDesc}>
+                {problem.problem_description}
+              </div>
+            )}
+
+            {problem.code_cells && problem.code_cells.length > 0 ? (() => {
+              let codeIdx = 0;
+              return problem.code_cells.map((cell, idx) => {
+                if (cell.cell_type === 'markdown') {
+                  return (
+                    <div key={idx} style={nb.markdownCell}>
+                      <pre style={nb.markdownText}>{cell.source}</pre>
                     </div>
-                  )}
-                </div>
-              ))
-            ) : (
+                  );
+                }
+                codeIdx++;
+                return (
+                  <div key={idx} style={nb.cell}>
+                    <div style={nb.cellIn}>
+                      <span style={nb.cellLabel}>In [{codeIdx}]:</span>
+                      <pre style={nb.code}>{cell.source || '(빈 셀)'}</pre>
+                    </div>
+                    {cell.outputs && cell.outputs.length > 0 && (
+                      <div style={nb.cellOut}>
+                        <span style={nb.cellOutLabel}>Out:</span>
+                        <div style={nb.output}>
+                          {cell.outputs.map((o, oi) => (
+                            <React.Fragment key={oi}>
+                              {o.output_type === 'error'
+                                ? <pre style={nb.errorText}>{o.text}</pre>
+                                : o.text && <pre style={nb.outputText}>{o.text}</pre>}
+                              {o.image && <img src={`data:image/png;base64,${o.image}`} alt="output" style={nb.outputImage} />}
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              });
+            })() : (
               <div style={nb.empty}>제출된 코드가 없습니다</div>
             )}
           </div>
@@ -75,18 +121,27 @@ function FeedbackPanel({ student }) {
           const pRatio = problem.full_score > 0
             ? problem.obtained_score / problem.full_score
             : 0;
-          const barColor = pRatio >= 0.8 ? '#059669' : pRatio >= 0.5 ? '#d97706' : '#dc2626';
+          const isFullScore = pRatio >= 1.0;
+          const isZero = problem.obtained_score === 0;
+          const statusColor = isFullScore ? '#059669' : isZero ? '#dc2626' : '#d97706';
+          const statusBg = isFullScore ? '#f0fdf4' : isZero ? '#fef2f2' : '#fffbeb';
+          const statusBorder = isFullScore ? '#bbf7d0' : isZero ? '#fecaca' : '#fde68a';
 
           return (
-            <div key={problem.problem_id} style={fb.problem}>
-              <div style={fb.problemHeader}>
+            <div key={problem.problem_id} style={{ ...fb.problem, borderColor: statusBorder, borderLeftWidth: 4, borderLeftColor: statusColor }}>
+              <div style={{ ...fb.problemHeader, background: statusBg, borderBottomColor: statusBorder }}>
                 <span style={fb.problemTitle}>문제 {problem.problem_id}</span>
-                <span style={{ ...fb.problemScore, color: barColor }}>
+                <span style={{ ...fb.problemScore, color: statusColor }}>
                   {problem.obtained_score.toFixed(2)} / {problem.full_score}점
                 </span>
               </div>
+              {problem.evaluation_guideline && (
+                <div style={fb.problemDescription}>
+                  📌 {problem.evaluation_guideline}
+                </div>
+              )}
               <div style={fb.progressBar}>
-                <div style={{ ...fb.progressFill, width: `${pRatio * 100}%`, background: barColor }} />
+                <div style={{ ...fb.progressFill, width: `${pRatio * 100}%`, background: statusColor }} />
               </div>
 
               <div style={fb.criteriaList}>
@@ -202,8 +257,11 @@ const nb = {
     fontSize: 13, fontWeight: 700, color: '#89b4fa',
     marginBottom: 10, paddingLeft: 4,
   },
-  matchBadge: {
-    borderRadius: 20, padding: '2px 10px', fontSize: 11, fontWeight: 600,
+  problemDesc: {
+    background: '#2d2d3a', border: '1px solid #404050', borderRadius: 6,
+    padding: '10px 12px', marginBottom: 12, fontSize: 12,
+    color: '#a6e3a1', lineHeight: 1.6, whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
   },
   cell: {
     border: '1px solid #313244', borderRadius: 8,
@@ -222,6 +280,27 @@ const nb = {
     margin: 0, fontSize: 13, fontFamily: 'monospace',
     color: '#a6e3a1', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
   },
+  outputImage: {
+    maxWidth: '100%', borderRadius: 4, marginTop: 4,
+    background: '#fff',
+  },
+  errorText: {
+    margin: 0, fontSize: 13, fontFamily: 'monospace',
+    color: '#f38ba8', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+    background: '#302030', borderRadius: 4, padding: '8px 10px',
+    borderLeft: '3px solid #f38ba8',
+  },
+  markdownCell: {
+    border: '1px solid #45475a', borderRadius: 8,
+    marginBottom: 10, overflow: 'hidden',
+    background: '#2a2a3d',
+  },
+  markdownText: {
+    margin: 0, padding: '10px 14px',
+    fontSize: 13, fontFamily: 'inherit',
+    color: '#f5c2e7', lineHeight: 1.7,
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+  },
   empty: {
     fontSize: 13, color: '#6c7086', padding: '20px',
     textAlign: 'center', fontStyle: 'italic',
@@ -231,7 +310,7 @@ const nb = {
 /* ── Feedback panel (right) ── */
 const fb = {
   panel: {
-    width: 420, flexShrink: 0,
+    width: 500, flexShrink: 0,
     display: 'flex', flexDirection: 'column',
     overflow: 'hidden', background: '#fff',
   },
@@ -254,26 +333,54 @@ const fb = {
     border: '1px solid #fecaca', color: '#dc2626',
     borderRadius: 8, padding: '10px 14px', fontSize: 13,
   },
-  body: { overflowY: 'auto', flex: 1, padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 16 },
-  problem: { border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' },
+  body: {
+    overflowY: 'auto', flex: 1, padding: '16px 20px',
+    display: 'flex', flexDirection: 'column', gap: 16,
+  },
+  problem: {
+    border: '1px solid #e2e8f0', borderRadius: 12,
+    overflow: 'visible',
+  },
   problemHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '12px 16px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0',
+    borderRadius: '12px 12px 0 0',
   },
   problemTitle: { fontWeight: 700, fontSize: 15, color: '#1e293b' },
   problemScore: { fontWeight: 700, fontSize: 15 },
+  problemDescription: {
+    padding: '12px 16px', background: '#f0f9ff',
+    borderBottom: '1px solid #e2e8f0', fontSize: 13,
+    color: '#1e293b', lineHeight: 1.6,
+    wordBreak: 'break-word', whiteSpace: 'pre-wrap',
+  },
   progressBar: {
     height: 4, background: '#e2e8f0', margin: '0 16px 12px',
     borderRadius: 99, overflow: 'hidden',
   },
   progressFill: { height: '100%', borderRadius: 99, transition: 'width 0.3s' },
-  criteriaList: { padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: 8 },
-  criterion: { background: '#f8fafc', borderRadius: 8, padding: '10px 12px' },
-  criterionTop: { display: 'flex', justifyContent: 'space-between', marginBottom: 5 },
-  criterionItem: { fontWeight: 600, fontSize: 13, color: '#374151' },
-  criterionScore: { fontWeight: 700, fontSize: 13 },
-  reason: { fontSize: 12, color: '#64748b', lineHeight: 1.6, margin: 0 },
-  aiFeedback: { margin: '0 16px 14px', background: '#eff6ff', borderRadius: 8, padding: '10px 12px' },
-  aiFeedbackLabel: { fontSize: 12, fontWeight: 600, color: '#2563eb', marginBottom: 5 },
-  aiFeedbackText: { fontSize: 12, color: '#374151', lineHeight: 1.7, margin: 0 },
+  criteriaList: { padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: 10 },
+  criterion: {
+    background: '#f8fafc', borderRadius: 10, padding: '12px 14px',
+    border: '1px solid #f1f5f9',
+  },
+  criterionTop: {
+    display: 'flex', justifyContent: 'space-between',
+    alignItems: 'flex-start', gap: 10, marginBottom: 6,
+  },
+  criterionItem: { fontWeight: 600, fontSize: 13, color: '#374151', flex: 1, wordBreak: 'break-word' },
+  criterionScore: { fontWeight: 700, fontSize: 13, flexShrink: 0, whiteSpace: 'nowrap' },
+  reason: {
+    fontSize: 13, color: '#475569', lineHeight: 1.7, margin: 0,
+    wordBreak: 'break-word', whiteSpace: 'pre-wrap',
+  },
+  aiFeedback: {
+    margin: '0 16px 14px', background: '#eff6ff', borderRadius: 10, padding: '14px 16px',
+    border: '1px solid #dbeafe',
+  },
+  aiFeedbackLabel: { fontSize: 12, fontWeight: 700, color: '#2563eb', margin: '0 0 8px' },
+  aiFeedbackText: {
+    fontSize: 13, color: '#374151', lineHeight: 1.8, margin: 0,
+    wordBreak: 'break-word', whiteSpace: 'pre-wrap',
+  },
 };

@@ -22,7 +22,7 @@ export default function LoginPage() {
       localStorage.setItem('token', token);
       const meRes = await authAPI.me();
       login(token, meRes.data);
-      navigate('/upload');
+      navigate(meRes.data.role === 'admin' ? '/admin' : '/upload');
     } catch (err) {
       setError(err.response?.data?.detail || '로그인에 실패했습니다');
     } finally {
@@ -62,15 +62,16 @@ export default function LoginPage() {
             />
           </div>
           {error && <div style={styles.error}>{error}</div>}
-          <button style={loading ? {...styles.button, opacity:0.7} : styles.button} type="submit" disabled={loading}>
+          <button style={loading ? { ...styles.button, opacity: 0.7 } : styles.button} type="submit" disabled={loading}>
             {loading ? '로그인 중...' : '로그인'}
           </button>
         </form>
         <div style={styles.hint}>
-          <p style={{color:'#94a3b8', fontSize:13}}>기본 계정: professor / secret</p>
-          <div style={{marginTop:12, borderTop:'1px solid #f1f5f9', paddingTop:12}}>
-            <span style={{color:'#94a3b8', fontSize:13}}>처음 사용하시나요? </span>
-            <a href="/register" style={{color:'#2563eb', fontSize:13, fontWeight:600, textDecoration:'none'}}>
+          <p style={{ color: '#94a3b8', fontSize: 13 }}>기본 계정: professor / secret</p>
+          <p style={{ color: '#f59e0b', fontSize: 12, marginTop: 4 }}>관리자: admin / admin123123</p>
+          <div style={{ marginTop: 12, borderTop: '1px solid #f1f5f9', paddingTop: 12 }}>
+            <span style={{ color: '#94a3b8', fontSize: 13 }}>처음 사용하시나요? </span>
+            <a href="/register" style={{ color: '#000000ff', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
               회원가입
             </a>
           </div>
@@ -83,7 +84,7 @@ export default function LoginPage() {
 const styles = {
   container: {
     minHeight: '100vh', display: 'flex', alignItems: 'center',
-    justifyContent: 'center', background: 'linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%)'
+    justifyContent: 'center', background: 'linear-gradient(135deg, #c1fffaff 0%, #f0f9ff 100%)'
   },
   card: {
     background: '#fff', borderRadius: 16, padding: '48px 40px',

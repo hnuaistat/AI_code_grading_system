@@ -34,13 +34,29 @@ export const subjectAPI = {
 };
 
 export const gradingAPI = {
+  parseNotebook: (formData) => API.post('/rubric/parse-notebook', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
   startGrading: (formData) => API.post('/grading/start', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
+  resumeGrading: (sessionId, formData) => API.post(`/grading/resume/${sessionId}`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),
   getSession: (sessionId) => API.get(`/grading/session/${sessionId}`),
   getResults: (sessionId) => API.get(`/grading/session/${sessionId}/results`),
   downloadExcel: (sessionId) => API.get(`/grading/session/${sessionId}/download`, { responseType: 'blob' }),
   getHistory: () => API.get('/grading/history'),
+};
+
+export const adminAPI = {
+  getStats: () => API.get('/admin/stats'),
+  getUsers: () => API.get('/admin/users'),
+  updateUser: (userId, data) => API.put(`/admin/users/${userId}`, data),
+  deleteUser: (userId) => API.delete(`/admin/users/${userId}`),
+  getSettings: () => API.get('/admin/settings'),
+  updateSettings: (data) => API.put('/admin/settings', data),
+  getSessions: () => API.get('/admin/sessions'),
 };
 
 export default API;

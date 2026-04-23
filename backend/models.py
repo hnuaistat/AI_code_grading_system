@@ -43,6 +43,14 @@ class SubjectItem(Base):
     subject = relationship("Subject", back_populates="items")
 
 
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class GradingSessionDB(Base):
     __tablename__ = "grading_sessions_db"
 
@@ -56,6 +64,7 @@ class GradingSessionDB(Base):
     processed_students = Column(Integer, default=0)
     error = Column(Text, nullable=True)
     results_json = Column(Text, nullable=True)
+    tokens_used = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 

@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Union
 
 
 class Token(BaseModel):
@@ -66,13 +66,16 @@ class PartialScoreCriterion(BaseModel):
 
 
 class Problem(BaseModel):
-    problem_id: int
+    problem_id: Union[int, str]
     full_score: float
     partial_score_criteria: List[PartialScoreCriterion]
+    evaluation_guideline: Optional[str] = None
 
 
 class GradingCriteria(BaseModel):
     problems: List[Problem]
+    global_evaluation_guideline: Optional[str] = None
+    exam_title: Optional[str] = None
 
 
 class PartialScoreResult(BaseModel):
@@ -85,26 +88,31 @@ class PartialScoreResult(BaseModel):
 class NotebookCellOutput(BaseModel):
     output_type: str
     text: str
+    image: Optional[str] = None  # base64 인코딩된 이미지 (image/png)
 
 
 class NotebookCell(BaseModel):
     source: str
     outputs: List[NotebookCellOutput] = []
+    cell_type: str = "code"
 
 
 class ProblemResult(BaseModel):
-    problem_id: int
+    problem_id: Union[int, str]
     full_score: float
     obtained_score: float
     output_match: bool
     partial_scores: List[PartialScoreResult]
     ai_feedback: Optional[str] = None
     code_cells: List[NotebookCell] = []
+    preamble_cells: List[NotebookCell] = []
+    problem_description: Optional[str] = None
 
 
 class StudentResult(BaseModel):
     filename: str
     student_id: str
+    student_name: Optional[str] = None  # 노트북의 "# 이름" 셀에서 추출
     total_score: float
     max_total_score: float
     problems: List[ProblemResult]
