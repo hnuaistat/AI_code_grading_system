@@ -111,8 +111,12 @@ def seed_database():
 
 @app.on_event("startup")
 async def startup():
-    models.Base.metadata.create_all(bind=engine)
-    seed_database()
+    try:
+        models.Base.metadata.create_all(bind=engine)
+        seed_database()
+    except Exception as e:
+        print(f"Warning: Database initialization failed: {str(e)}")
+        print("App will continue running, but with empty database.")
 
 
 # ─── Auth ──────────────────────────────────────────────────────────────────────
