@@ -139,12 +139,23 @@ async def grade_student_notebook(
         stu_cells = stu_problem_data.get('cells', []) if stu_problem_data else []
         problem_description = ans_problem_data.get('description', '') if ans_problem_data else ""
 
-        # 코드 셀만 추출 (마크다운 셀 제외) — AI 채점 및 출력 비교용
+        # 코드 + 마크다운 셀 모두 추출 (AI 채점 및 설명 반영용)
         ans_code_cells = [c for c in ans_cells if c.get('cell_type', 'code') == 'code']
         stu_code_cells = [c for c in stu_cells if c.get('cell_type', 'code') == 'code']
 
-        ans_code = "\n\n".join(c['source'] for c in ans_code_cells) if ans_code_cells else ""
-        stu_code = "\n\n".join(c['source'] for c in stu_code_cells) if stu_code_cells else ""
+        ans_markdown_cells = [c for c in ans_cells if c.get('cell_type', 'code') == 'markdown']
+        stu_markdown_cells = [c for c in stu_cells if c.get('cell_type', 'code') == 'markdown']
+
+        # 코드와 마크다운을 함께 구성 (마크다운이 있으면 코드 앞에 배치)
+        ans_code = ""
+        if ans_markdown_cells:
+            ans_code += "### [정답 설명]\n" + "\n\n".join(c['source'] for c in ans_markdown_cells) + "\n\n### [정답 코드]\n"
+        ans_code += "\n\n".join(c['source'] for c in ans_code_cells) if ans_code_cells else ""
+
+        stu_code = ""
+        if stu_markdown_cells:
+            stu_code += "### [학생 설명]\n" + "\n\n".join(c['source'] for c in stu_markdown_cells) + "\n\n### [학생 코드]\n"
+        stu_code += "\n\n".join(c['source'] for c in stu_code_cells) if stu_code_cells else ""
 
         # Output comparison (use stored outputs)
         ans_outputs_flat = []
