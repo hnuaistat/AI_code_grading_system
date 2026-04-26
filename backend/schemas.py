@@ -70,6 +70,7 @@ class Problem(BaseModel):
     full_score: float
     partial_score_criteria: List[PartialScoreCriterion]
     evaluation_guideline: Optional[str] = None
+    requires_code: bool = True  # 코드 필수 여부 (기본값: True)
 
 
 class GradingCriteria(BaseModel):

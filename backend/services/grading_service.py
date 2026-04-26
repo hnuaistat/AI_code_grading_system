@@ -157,6 +157,33 @@ async def grade_student_notebook(
             stu_code += "### [학생 설명]\n" + "\n\n".join(c['source'] for c in stu_markdown_cells) + "\n\n### [학생 코드]\n"
         stu_code += "\n\n".join(c['source'] for c in stu_code_cells) if stu_code_cells else ""
 
+        # 코드 필수 여부 확인
+        requires_code = getattr(problem, 'requires_code', True)
+        has_code = bool(stu_code_cells and any(c.get('source', '').strip() for c in stu_code_cells))
+        has_markdown = bool(stu_markdown_cells and any(c.get('source', '').strip() for c in stu_markdown_cells))
+
+        # 코드 필수인데 없는 경우 → 즉시 0점
+        if requires_code and not has_code:
+            missing_code_reason = "코드가 제출되지 않았습니다." if not has_markdown else "코드가 제출되지 않았습니다. (마크다운만 있음)"
+            problem_results.append(ProblemResult(
+                problem_id=problem.problem_id,
+                full_score=problem.full_score,
+                obtained_score=0.0,
+                output_match=False,
+                partial_scores=[],
+                ai_feedback=missing_code_reason,
+                code_cells=[],
+                preamble_cells=nb_preamble if is_first_problem else [],
+                problem_description=problem_description
+            ))
+            is_first_problem = False
+            continue
+
+        # 코드 불필수: 마크다운만 있어도 OK
+        if not requires_code and not has_code and has_markdown:
+            # 마크다운을 "답변"으로 취급
+            stu_code = "### [서술형 답변]\n" + "\n\n".join(c['source'] for c in stu_markdown_cells)
+
         # Output comparison (use stored outputs)
         ans_outputs_flat = []
         stu_outputs_flat = []

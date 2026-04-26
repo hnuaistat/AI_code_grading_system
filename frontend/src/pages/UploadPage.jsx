@@ -203,6 +203,21 @@ function RubricEditor({ rubric, onChange }) {
               <button style={re.removeProblemBtn} onClick={() => removeProblem(pIdx)} title="문제 삭제">✕</button>
             </div>
 
+            <div style={re.codeRequiredRow}>
+              <label style={re.checkboxLabel}>
+                <input
+                  type="checkbox"
+                  checked={problem.requires_code !== false}
+                  onChange={e => updateProblem(pIdx, 'requires_code', e.target.checked)}
+                  style={{ marginRight: 6 }}
+                />
+                코드 제출 필수
+              </label>
+              <span style={re.checkboxHint}>
+                {problem.requires_code !== false ? '✓ 코드 필수' : '○ 마크다운만 가능'}
+              </span>
+            </div>
+
             <div style={re.fieldGroup}>
               <label style={re.smallLabel}>평가 가이드라인</label>
               <textarea
@@ -288,6 +303,9 @@ const re = {
     background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
   },
   problemHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
+  codeRequiredRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, padding: '10px 12px', background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb' },
+  checkboxLabel: { fontSize: 14, fontWeight: 500, color: '#374151', display: 'flex', alignItems: 'center', cursor: 'pointer', margin: 0 },
+  checkboxHint: { fontSize: 12, color: '#9ca3af', marginLeft: 'auto' },
   problemIdRow: { display: 'flex', alignItems: 'center', gap: 16 },
   problemIdInput: {
     padding: '6px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 16,
