@@ -180,7 +180,15 @@ export default function DashboardPage() {
       {selectedStudent && (
         <StudentDetailModal
           student={selectedStudent}
+          sessionId={sessionId}
           onClose={() => setSelectedStudent(null)}
+          onStudentUpdate={(updated) => {
+            setSelectedStudent(updated);
+            setSession(prev => prev ? {
+              ...prev,
+              results: prev.results.map(r => r.filename === updated.filename ? updated : r)
+            } : prev);
+          }}
         />
       )}
 

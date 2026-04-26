@@ -108,6 +108,9 @@ class ProblemResult(BaseModel):
     code_cells: List[NotebookCell] = []
     preamble_cells: List[NotebookCell] = []
     problem_description: Optional[str] = None
+    professor_feedback: Optional[str] = None
+    is_revised: bool = False
+    revised_at: Optional[str] = None
 
 
 class StudentResult(BaseModel):
@@ -129,3 +132,24 @@ class GradingSession(BaseModel):
     processed_students: int
     results: List[StudentResult]
     error: Optional[str] = None
+
+
+class ProblemRevisionRequest(BaseModel):
+    """교수의 점수/피드백 수정 요청"""
+    student_filename: str
+    problem_id: Union[int, str]
+    obtained_score: Optional[float] = None
+    professor_feedback: Optional[str] = None
+    partial_scores: Optional[List[PartialScoreResult]] = None
+
+
+class RevisionLogItem(BaseModel):
+    id: int
+    student_filename: str
+    problem_id: str
+    field_name: str
+    partial_score_index: Optional[int] = None
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    revised_by_username: Optional[str] = None
+    revised_at: str

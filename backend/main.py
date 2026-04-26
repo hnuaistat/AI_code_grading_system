@@ -26,7 +26,8 @@ from auth import (
 )
 from schemas import (
     Token, LoginRequest, RegisterRequest, GradingCriteria, GradingSession,
-    StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem, SubjectItemCreate
+    StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem, SubjectItemCreate,
+    ProblemRevisionRequest, RevisionLogItem
 )
 from services.notebook_service import (
     extract_notebooks_from_zip, parse_student_id_from_filename,
@@ -667,6 +668,194 @@ async def get_results(session_id: str, current_user=Depends(get_current_user), d
     if db_record.results_json:
         results = [StudentResult(**r) for r in json.loads(db_record.results_json)]
     return results
+
+
+@app.patch("/grading/session/{session_id}/revise")
+async def revise_problem_score(
+    session_id: str,
+    revision: ProblemRevisionRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """교수가 점수 또는 코멘트를 수정. 이력은 자동 기록됨."""
+    # 1. 권한 확인 (교수 또는 관리자만)
+    if current_user.get("role") not in ("professor", "admin"):
+        raise HTTPException(status_code=403, detail="교수 권한이 필요합니다")
+
+    # 2. DB 세션 가져오기
+    db_record = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.id == session_id
+    ).first()
+    if not db_record or not db_record.results_json:
+        raise HTTPException(status_code=404, detail="채점 세션을 찾을 수 없습니다")
+
+    # 3. 세션 소유자 확인 (해당 강의 교수만)
+    if db_record.user_id and db_record.user_id != current_user["id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="해당 채점 세션의 수정 권한이 없습니다")
+
+    # 4. 결과 파싱 후 해당 학생/문제 찾기
+    results = json.loads(db_record.results_json)
+    target_student = None
+    target_problem = None
+    for student in results:
+        if student.get("filename") == revision.student_filename:
+            target_student = student
+            for p in student.get("problems", []):
+                if str(p.get("problem_id")) == str(revision.problem_id):
+                    target_problem = p
+                    break
+            break
+
+    if not target_student or not target_problem:
+        raise HTTPException(status_code=404, detail="해당 학생/문제를 찾을 수 없습니다")
+
+    full_score = float(target_problem.get("full_score", 0))
+    revision_logs = []
+
+    # 5-A. partial_scores 수정 (각 세부 항목)
+    if revision.partial_scores is not None:
+        existing_partials = target_problem.get("partial_scores", [])
+        for i, new_ps in enumerate(revision.partial_scores):
+            if i >= len(existing_partials):
+                continue
+            old_ps = existing_partials[i]
+            max_score = float(old_ps.get("max_score", 0))
+            new_score = float(new_ps.score)
+
+            # 점수 범위 검증: 0 ~ max_score
+            if new_score < 0 or new_score > max_score:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"세부 점수는 0 ~ {max_score}점 범위여야 합니다 (입력값: {new_score})"
+                )
+
+            # 점수 변경 시 이력 기록
+            if old_ps.get("score") != new_score:
+                revision_logs.append(models.ProblemRevisionLog(
+                    session_id=session_id,
+                    student_filename=revision.student_filename,
+                    problem_id=str(revision.problem_id),
+                    field_name="partial_score",
+                    partial_score_index=i,
+                    old_value=str(old_ps.get("score")),
+                    new_value=str(new_score),
+                    revised_by=current_user["id"],
+                ))
+                existing_partials[i]["score"] = new_score
+
+            # 사유 변경 시 이력 기록
+            if new_ps.reason and old_ps.get("reason") != new_ps.reason:
+                revision_logs.append(models.ProblemRevisionLog(
+                    session_id=session_id,
+                    student_filename=revision.student_filename,
+                    problem_id=str(revision.problem_id),
+                    field_name="partial_reason",
+                    partial_score_index=i,
+                    old_value=old_ps.get("reason"),
+                    new_value=new_ps.reason,
+                    revised_by=current_user["id"],
+                ))
+                existing_partials[i]["reason"] = new_ps.reason
+
+        # 세부 항목 합계로 obtained_score 자동 재계산
+        target_problem["obtained_score"] = round(sum(p.get("score", 0) for p in existing_partials), 2)
+
+    # 5-B. obtained_score 직접 수정 (세부 항목이 없는 경우만)
+    elif revision.obtained_score is not None:
+        if not target_problem.get("partial_scores"):
+            new_score = float(revision.obtained_score)
+            if new_score < 0 or new_score > full_score:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"점수는 0 ~ {full_score}점 범위여야 합니다 (입력값: {new_score})"
+                )
+            old_score = target_problem.get("obtained_score")
+            if old_score != new_score:
+                revision_logs.append(models.ProblemRevisionLog(
+                    session_id=session_id,
+                    student_filename=revision.student_filename,
+                    problem_id=str(revision.problem_id),
+                    field_name="obtained_score",
+                    old_value=str(old_score),
+                    new_value=str(new_score),
+                    revised_by=current_user["id"],
+                ))
+                target_problem["obtained_score"] = new_score
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="세부 항목이 있는 문제는 obtained_score를 직접 수정할 수 없습니다 (partial_scores를 수정하세요)"
+            )
+
+    # 5-C. 교수 코멘트 수정
+    if revision.professor_feedback is not None:
+        old_feedback = target_problem.get("professor_feedback")
+        if old_feedback != revision.professor_feedback:
+            revision_logs.append(models.ProblemRevisionLog(
+                session_id=session_id,
+                student_filename=revision.student_filename,
+                problem_id=str(revision.problem_id),
+                field_name="professor_feedback",
+                old_value=old_feedback,
+                new_value=revision.professor_feedback,
+                revised_by=current_user["id"],
+            ))
+            target_problem["professor_feedback"] = revision.professor_feedback
+
+    # 6. 수정 표시 + 학생 총점 재계산
+    if revision_logs:
+        target_problem["is_revised"] = True
+        target_problem["revised_at"] = datetime.utcnow().isoformat()
+        target_student["total_score"] = round(
+            sum(p.get("obtained_score", 0) for p in target_student.get("problems", [])), 2
+        )
+
+        # 7. DB 저장
+        db_record.results_json = json.dumps(results, ensure_ascii=False)
+        for log in revision_logs:
+            db.add(log)
+        db.commit()
+
+    return {
+        "success": True,
+        "revisions_count": len(revision_logs),
+        "updated_problem": target_problem,
+        "updated_total_score": target_student["total_score"]
+    }
+
+
+@app.get("/grading/session/{session_id}/revisions")
+async def get_revision_logs(
+    session_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """수정 이력 조회"""
+    db_record = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.id == session_id
+    ).first()
+    if not db_record:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    logs = db.query(models.ProblemRevisionLog).filter(
+        models.ProblemRevisionLog.session_id == session_id
+    ).order_by(models.ProblemRevisionLog.revised_at.desc()).all()
+
+    result = []
+    for log in logs:
+        user = db.query(models.User).filter(models.User.id == log.revised_by).first()
+        result.append({
+            "id": log.id,
+            "student_filename": log.student_filename,
+            "problem_id": log.problem_id,
+            "field_name": log.field_name,
+            "partial_score_index": log.partial_score_index,
+            "old_value": log.old_value,
+            "new_value": log.new_value,
+            "revised_by_username": user.username if user else None,
+            "revised_at": log.revised_at.isoformat(),
+        })
+    return result
 
 
 @app.get("/grading/session/{session_id}/download")

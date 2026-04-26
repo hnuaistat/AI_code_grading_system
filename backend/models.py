@@ -70,3 +70,19 @@ class GradingSessionDB(Base):
 
     user = relationship("User", back_populates="sessions")
     subject = relationship("Subject", back_populates="sessions")
+
+
+class ProblemRevisionLog(Base):
+    """교수의 점수/코멘트 수정 이력 추적"""
+    __tablename__ = "problem_revision_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(36), ForeignKey("grading_sessions_db.id"), nullable=False, index=True)
+    student_filename = Column(String(255), nullable=False)
+    problem_id = Column(String(50), nullable=False)
+    field_name = Column(String(50), nullable=False)  # "obtained_score", "professor_feedback", "partial_score"
+    partial_score_index = Column(Integer, nullable=True)  # partial_scores 수정 시 인덱스
+    old_value = Column(Text, nullable=True)
+    new_value = Column(Text, nullable=True)
+    revised_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    revised_at = Column(DateTime, default=datetime.utcnow)

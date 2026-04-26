@@ -56,6 +56,8 @@ export const gradingAPI = {
   getResults: (sessionId) => API.get(`/grading/session/${sessionId}/results`),
   downloadExcel: (sessionId) => API.get(`/grading/session/${sessionId}/download`, { responseType: 'blob' }),
   getHistory: () => API.get('/grading/history'),
+  reviseProblem: (sessionId, payload) => API.patch(`/grading/session/${sessionId}/revise`, payload),
+  getRevisions: (sessionId) => API.get(`/grading/session/${sessionId}/revisions`),
 };
 
 export const adminAPI = {
