@@ -429,13 +429,11 @@ export default function UploadPage() {
     setLoading(true);
     setStep(1);
     try {
-      const fd = new FormData();
-      fd.append('file', answerFile);
-      const res = await gradingAPI.parseNotebook(fd);
+      const res = await gradingAPI.generateRubric(answerFile, 100.0, '');
       setRubric(res.data);
       setStep(2);
     } catch (err) {
-      const detail = err.response?.data?.detail || '루브릭 파싱에 실패했습니다';
+      const detail = err.response?.data?.detail || 'AI 루브릭 생성에 실패했습니다';
       setError(detail);
       setStep(0);
     } finally {

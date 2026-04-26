@@ -37,6 +37,15 @@ export const gradingAPI = {
   parseNotebook: (formData) => API.post('/rubric/parse-notebook', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),
+  generateRubric: (answerNotebook, totalScore = 100.0, examTitle = '') => {
+    const formData = new FormData();
+    formData.append('answer_notebook', answerNotebook);
+    formData.append('total_score', totalScore);
+    formData.append('exam_title', examTitle);
+    return API.post('/grading/generate-rubric', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+  },
   startGrading: (formData) => API.post('/grading/start', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),
