@@ -120,6 +120,11 @@ async def startup():
         print("App will continue running, but with empty database.")
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 # ─── Auth ──────────────────────────────────────────────────────────────────────
 
 @app.post("/auth/login", response_model=Token)
