@@ -125,6 +125,29 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/debug/openai-test")
+async def debug_openai_test():
+    import httpx
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    base_url = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    results = {
+        "api_key_set": bool(api_key),
+        "api_key_prefix": api_key[:8] if api_key else "",
+        "base_url": base_url,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                f"{base_url}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            results["httpx_status"] = r.status_code
+            results["httpx_body"] = r.text[:300]
+    except Exception as e:
+        results["httpx_error"] = f"{type(e).__name__}: {str(e)}"
+    return results
+
+
 # ─── Auth ──────────────────────────────────────────────────────────────────────
 
 @app.post("/auth/login", response_model=Token)

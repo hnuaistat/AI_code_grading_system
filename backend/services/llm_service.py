@@ -4,6 +4,7 @@ import asyncio
 import traceback
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
+import httpx
 from openai import AsyncOpenAI
 import openai
 from schemas import PartialScoreCriterion
@@ -16,7 +17,18 @@ class APIQuotaError(Exception):
 
 def get_openai_client() -> AsyncOpenAI:
     api_key = os.getenv("OPENAI_API_KEY", "")
-    return AsyncOpenAI(api_key=api_key)
+    base_url = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0, connect=30.0),
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=5),
+    )
+    return AsyncOpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        http_client=http_client,
+        timeout=120.0,
+        max_retries=2,
+    )
 
 
 async def _call_with_retry(coro_fn, max_retries: int = 3):
