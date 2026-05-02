@@ -128,7 +128,7 @@ async def generate_rubric_with_ai(
     except json.JSONDecodeError as e:
         raise ValueError(f"AI 응답 JSON 파싱 오류: {str(e)}\n응답 내용: {content[:500]}")
     except Exception as e:
-        raise RuntimeError(f"루브릭 생성 중 오류: {str(e)}")
+        raise RuntimeError(f"루브릭 생성 중 오류: [{type(e).__name__}] {str(e)}")
 
 
 async def grade_with_ai(
