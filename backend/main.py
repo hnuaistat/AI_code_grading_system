@@ -9,7 +9,7 @@ from typing import Dict, Optional
 
 from fastapi import (
     FastAPI, Depends, HTTPException, status, UploadFile, File,
-    Form, BackgroundTasks
+    Form, BackgroundTasks, Body
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -698,6 +698,41 @@ async def get_results(session_id: str, current_user=Depends(get_current_user), d
     return results
 
 
+@app.delete("/grading/session/{session_id}")
+async def delete_session(
+    session_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """채점 세션 삭제 (소유자 또는 admin만 가능)."""
+    db_record = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.id == session_id
+    ).first()
+    if not db_record:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    is_owner = db_record.user_id == current_user["id"]
+    is_admin = current_user.get("role") == "admin"
+    if not (is_owner or is_admin):
+        raise HTTPException(status_code=403, detail="삭제 권한이 없습니다")
+
+    # 진행 중 세션은 삭제 불가
+    if db_record.status == "running":
+        raise HTTPException(status_code=400, detail="진행 중인 채점은 삭제할 수 없습니다")
+
+    # FK로 연결된 수정 이력 먼저 삭제
+    db.query(models.ProblemRevisionLog).filter(
+        models.ProblemRevisionLog.session_id == session_id
+    ).delete(synchronize_session=False)
+
+    # 메모리 세션도 정리 (있다면)
+    grading_sessions.pop(session_id, None)
+
+    db.delete(db_record)
+    db.commit()
+    return {"message": "채점 기록이 삭제되었습니다"}
+
+
 @app.patch("/grading/session/{session_id}/revise")
 async def revise_problem_score(
     session_id: str,
@@ -1334,3 +1369,98 @@ async def admin_list_sessions(
             "completed_at": r.completed_at.isoformat() if r.completed_at else None,
         })
     return result
+
+
+@app.get("/admin/db/schema")
+async def admin_db_schema(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """DB 스키마 정보 반환 (테이블 + 컬럼 목록)."""
+    excluded_tables = {"grading_sessions_db"}
+    table_descriptions = {
+        "users": "교수/관리자 계정",
+        "subjects": "수업 정보",
+        "subject_items": "수업별 시험/과제",
+        "system_settings": "시스템 설정값",
+        "problem_revision_logs": "교수 점수/코멘트 수정 이력",
+    }
+    schema = []
+    for table_name, table in models.Base.metadata.tables.items():
+        if table_name in excluded_tables:
+            continue
+        columns = []
+        for col in table.columns:
+            columns.append({
+                "name": col.name,
+                "type": str(col.type),
+                "nullable": col.nullable,
+                "primary_key": col.primary_key,
+            })
+        schema.append({
+            "table": table_name,
+            "description": table_descriptions.get(table_name, ""),
+            "columns": columns,
+        })
+    return schema
+
+
+@app.post("/admin/db/query")
+async def admin_db_query(
+    body: dict = Body(...),
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """SELECT 쿼리만 실행 (읽기 전용, 보안)."""
+    from sqlalchemy import text
+    query = (body.get("query") or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="쿼리가 비어있습니다")
+
+    # 세미콜론 차단 (다중 쿼리 방지: SELECT ...;DROP TABLE ... 같은 공격)
+    if ";" in query:
+        raise HTTPException(status_code=400, detail="세미콜론(;)은 허용되지 않습니다 (단일 쿼리만 가능)")
+
+    # SELECT 외 차단
+    lower = query.lower()
+    if not lower.lstrip().startswith("select"):
+        raise HTTPException(status_code=400, detail="SELECT 쿼리만 허용됩니다")
+
+    # 금지 테이블 접근 차단
+    blocked_tables = ["grading_sessions_db"]
+    for tbl in blocked_tables:
+        if tbl in lower:
+            raise HTTPException(status_code=403, detail=f"'{tbl}' 테이블은 조회할 수 없습니다")
+
+    # 금지 키워드 차단 (공백·세미콜론 기준으로 단어 분리하여 정확히 체크)
+    import re
+    forbidden = {"drop", "delete", "update", "insert", "alter", "truncate", "create", "grant", "revoke"}
+    words = set(re.split(r"[\s,();]+", lower))
+    blocked = words & forbidden
+    if blocked:
+        raise HTTPException(status_code=400, detail=f"'{next(iter(blocked))}' 키워드는 허용되지 않습니다")
+
+    try:
+        result = db.execute(text(query))
+        rows = result.fetchall()
+        columns = list(result.keys())
+        # 결과를 직렬화 가능한 형태로 변환
+        data = []
+        for row in rows[:1000]:  # 최대 1000건
+            row_dict = {}
+            for i, col in enumerate(columns):
+                val = row[i]
+                if isinstance(val, (datetime,)):
+                    val = val.isoformat()
+                elif val is not None and not isinstance(val, (str, int, float, bool, list, dict)):
+                    val = str(val)
+                row_dict[col] = val
+            data.append(row_dict)
+        return {
+            "columns": columns,
+            "rows": data,
+            "row_count": len(data),
+            "truncated": len(rows) > 1000,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"쿼리 실행 오류: {str(e)}")

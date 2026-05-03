@@ -10,6 +10,7 @@ function TabBar({ active, onChange }) {
     { key: 'users', label: '사용자 관리' },
     { key: 'sessions', label: '채점 세션' },
     { key: 'settings', label: '시스템 설정' },
+    { key: 'dbquery', label: 'DB 쿼리' },
   ];
   return (
     <div style={t.bar}>
@@ -325,6 +326,145 @@ function SettingsTab({ settings, onSave }) {
   );
 }
 
+/* ── DB 쿼리 탭 ── */
+function DBQueryTab() {
+  const [schema, setSchema] = useState(null);
+  const [selectedTable, setSelectedTable] = useState(null);
+  const [query, setQuery] = useState('');
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    adminAPI.getDbSchema()
+      .then(res => {
+        setSchema(res.data);
+        if (res.data.length > 0) setSelectedTable(res.data[0].table);
+      })
+      .catch(e => setError('스키마 로딩 실패'));
+  }, []);
+
+  const runQuery = async () => {
+    if (!query.trim()) return;
+    setLoading(true);
+    setError('');
+    setResult(null);
+    try {
+      const res = await adminAPI.runDbQuery(query);
+      setResult(res.data);
+    } catch (e) {
+      setError(e.response?.data?.detail || '쿼리 실행 오류');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const insertSample = (tableName) => {
+    setQuery(`SELECT * FROM ${tableName} LIMIT 10;`);
+  };
+
+  const selectedTableData = schema?.find(t => t.table === selectedTable);
+
+  return (
+    <div style={dq.wrapper}>
+      {/* 왼쪽: 테이블 목록 + 컬럼 정보 */}
+      <div style={dq.sidebar}>
+        <div style={dq.sidebarTitle}>📂 데이터베이스 테이블</div>
+        <div style={dq.tableList}>
+          {schema?.map(t => (
+            <div
+              key={t.table}
+              style={selectedTable === t.table ? { ...dq.tableItem, ...dq.tableItemActive } : dq.tableItem}
+              onClick={() => setSelectedTable(t.table)}
+              onDoubleClick={() => insertSample(t.table)}
+            >
+              <div style={dq.tableName}>{t.table}</div>
+              <div style={dq.tableDesc}>{t.description}</div>
+            </div>
+          ))}
+        </div>
+        {selectedTableData && (
+          <div style={dq.columnsBox}>
+            <div style={dq.columnsTitle}>📋 컬럼 정보</div>
+            <div style={dq.columnsList}>
+              {selectedTableData.columns.map(col => (
+                <div key={col.name} style={dq.columnItem}>
+                  <span style={dq.columnName}>
+                    {col.primary_key && '🔑 '}
+                    {col.name}
+                  </span>
+                  <span style={dq.columnType}>{col.type}</span>
+                </div>
+              ))}
+            </div>
+            <div style={dq.hint}>💡 테이블 더블클릭하면 샘플 쿼리 입력</div>
+          </div>
+        )}
+      </div>
+
+      {/* 오른쪽: 쿼리 + 결과 */}
+      <div style={dq.main}>
+        <div style={dq.queryBox}>
+          <div style={dq.queryHeader}>
+            <span style={dq.queryTitle}>✏️ SQL 쿼리 (SELECT만 가능)</span>
+            <button
+              style={loading ? { ...dq.runBtn, opacity: 0.6 } : dq.runBtn}
+              onClick={runQuery}
+              disabled={loading}
+            >
+              {loading ? '실행 중...' : '▶ 실행'}
+            </button>
+          </div>
+          <textarea
+            style={dq.queryInput}
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="예: SELECT * FROM users LIMIT 10;"
+          />
+        </div>
+
+        <div style={dq.resultBox}>
+          <div style={dq.resultTitle}>📊 쿼리 결과</div>
+          {error && <div style={dq.errorMsg}>❌ {error}</div>}
+          {!error && !result && <div style={dq.emptyResult}>쿼리를 실행하면 결과가 여기에 표시됩니다</div>}
+          {result && (
+            <div>
+              <div style={dq.resultMeta}>
+                {result.row_count}건 조회됨
+                {result.truncated && ' (1000건으로 제한됨)'}
+              </div>
+              <div style={dq.tableScroll}>
+                <table style={dq.resultTable}>
+                  <thead>
+                    <tr>
+                      {result.columns.map(col => (
+                        <th key={col} style={dq.resultTh}>{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.rows.map((row, i) => (
+                      <tr key={i}>
+                        {result.columns.map(col => (
+                          <td key={col} style={dq.resultTd}>
+                            {row[col] === null ? <span style={{ color: '#94a3b8' }}>NULL</span> :
+                             typeof row[col] === 'object' ? JSON.stringify(row[col]).slice(0, 100) :
+                             String(row[col]).slice(0, 200)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── 헬퍼 ── */
 function roleColor(role) {
   if (role === 'admin') return { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' };
@@ -392,6 +532,7 @@ export default function AdminPage() {
         {tab === 'users' && <UsersTab users={users} onRefresh={() => loadData('users')} />}
         {tab === 'sessions' && <SessionsTab sessions={sessions} />}
         {tab === 'settings' && <SettingsTab settings={settings} onSave={() => loadData('settings')} />}
+        {tab === 'dbquery' && <DBQueryTab />}
       </div>
     </div>
   );
@@ -497,5 +638,97 @@ const c = {
     padding: '10px 32px', borderRadius: 8, border: 'none',
     background: '#2563eb', color: '#fff', fontSize: 15, fontWeight: 700,
     cursor: 'pointer',
+  },
+};
+
+/* ── DB 쿼리 탭 스타일 ── */
+const dq = {
+  wrapper: {
+    display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16,
+    minHeight: 'calc(100vh - 240px)',
+  },
+  sidebar: {
+    background: '#1e293b', borderRadius: 12, padding: 16,
+    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+  },
+  sidebarTitle: {
+    fontSize: 14, fontWeight: 700, color: '#e2e8f0', marginBottom: 12,
+    paddingBottom: 8, borderBottom: '1px solid #334155',
+  },
+  tableList: {
+    display: 'flex', flexDirection: 'column', gap: 4,
+    maxHeight: 280, overflowY: 'auto', marginBottom: 16,
+  },
+  tableItem: {
+    padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
+    background: '#0f172a', border: '1px solid transparent',
+    transition: 'all 0.15s',
+  },
+  tableItemActive: {
+    background: '#1e3a8a', borderColor: '#3b82f6',
+  },
+  tableName: { fontSize: 13, fontWeight: 600, color: '#e2e8f0', marginBottom: 2 },
+  tableDesc: { fontSize: 11, color: '#94a3b8' },
+  columnsBox: {
+    flex: 1, paddingTop: 12, borderTop: '1px solid #334155',
+    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+  },
+  columnsTitle: { fontSize: 13, fontWeight: 700, color: '#cbd5e1', marginBottom: 10 },
+  columnsList: {
+    flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4,
+  },
+  columnItem: {
+    padding: '6px 10px', background: '#0f172a', borderRadius: 6,
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  },
+  columnName: { fontSize: 12, color: '#e2e8f0', fontFamily: 'monospace' },
+  columnType: { fontSize: 11, color: '#64748b', fontFamily: 'monospace' },
+  hint: { fontSize: 11, color: '#64748b', marginTop: 10, textAlign: 'center' },
+  main: { display: 'flex', flexDirection: 'column', gap: 16 },
+  queryBox: {
+    background: '#1e293b', borderRadius: 12, padding: 16,
+  },
+  queryHeader: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10,
+  },
+  queryTitle: { fontSize: 14, fontWeight: 700, color: '#e2e8f0' },
+  runBtn: {
+    padding: '8px 20px', borderRadius: 8, border: 'none',
+    background: '#2563eb', color: '#fff', fontSize: 13, fontWeight: 700,
+    cursor: 'pointer',
+  },
+  queryInput: {
+    width: '100%', minHeight: 120, padding: 12, borderRadius: 8,
+    border: '1px solid #475569', background: '#0f172a', color: '#e2e8f0',
+    fontSize: 13, fontFamily: 'monospace', resize: 'vertical', boxSizing: 'border-box',
+  },
+  resultBox: {
+    background: '#1e293b', borderRadius: 12, padding: 16, flex: 1,
+    display: 'flex', flexDirection: 'column',
+  },
+  resultTitle: { fontSize: 14, fontWeight: 700, color: '#e2e8f0', marginBottom: 12 },
+  resultMeta: { fontSize: 12, color: '#94a3b8', marginBottom: 8 },
+  emptyResult: {
+    padding: 32, textAlign: 'center', color: '#64748b', fontSize: 13,
+  },
+  errorMsg: {
+    padding: 12, background: '#7f1d1d', color: '#fecaca', borderRadius: 8,
+    fontSize: 13, fontFamily: 'monospace',
+  },
+  tableScroll: {
+    overflow: 'auto', maxHeight: 480, border: '1px solid #334155', borderRadius: 8,
+  },
+  resultTable: {
+    width: '100%', borderCollapse: 'collapse', fontSize: 12,
+  },
+  resultTh: {
+    padding: '8px 12px', background: '#334155', color: '#e2e8f0',
+    textAlign: 'left', fontWeight: 700, fontSize: 12,
+    borderBottom: '1px solid #475569', position: 'sticky', top: 0,
+  },
+  resultTd: {
+    padding: '6px 12px', color: '#cbd5e1', borderBottom: '1px solid #334155',
+    fontFamily: 'monospace', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
 };

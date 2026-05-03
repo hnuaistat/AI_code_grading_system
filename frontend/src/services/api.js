@@ -53,6 +53,7 @@ export const gradingAPI = {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),
   getSession: (sessionId) => API.get(`/grading/session/${sessionId}`),
+  deleteSession: (sessionId) => API.delete(`/grading/session/${sessionId}`),
   getResults: (sessionId) => API.get(`/grading/session/${sessionId}/results`),
   downloadExcel: (sessionId) => API.get(`/grading/session/${sessionId}/download`, { responseType: 'blob' }),
   getHistory: () => API.get('/grading/history'),
@@ -68,6 +69,8 @@ export const adminAPI = {
   getSettings: () => API.get('/admin/settings'),
   updateSettings: (data) => API.put('/admin/settings', data),
   getSessions: () => API.get('/admin/sessions'),
+  getDbSchema: () => API.get('/admin/db/schema'),
+  runDbQuery: (query) => API.post('/admin/db/query', { query }),
 };
 
 export default API;
