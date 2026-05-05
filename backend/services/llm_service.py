@@ -34,7 +34,14 @@ def parse_model_id(model: Optional[str]) -> Tuple[str, str]:
     if "/" not in model:
         return "openai", model
     provider, _, model_name = model.partition("/")
-    return provider.lower(), model_name
+    provider = provider.lower()
+
+    # Fireworks 모델은 마지막 segment만 API에 전달
+    # 'fireworks/accounts/fireworks/models/deepseek-v3' → 'deepseek-v3'
+    if provider == "fireworks":
+        model_name = model.split("/")[-1]
+
+    return provider, model_name
 
 
 def get_openai_client() -> AsyncOpenAI:
