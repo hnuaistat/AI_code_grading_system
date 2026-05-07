@@ -22,9 +22,9 @@ AVAILABLE_MODELS = [
     {"id": "openai/gpt-4o-mini", "label": "gpt-4o-mini", "provider": "openai"},
     {"id": "openai/gpt-4o", "label": "gpt-4o", "provider": "openai"},
     {"id": "openai/gpt-4.1-mini", "label": "gpt-4.1-mini", "provider": "openai"},
-    {"id": "fireworks/accounts/fireworks/models/deepseek-v4-pro", "label": "deepseek-v4", "provider": "fireworks"},
+    {"id": "fireworks/accounts/fireworks/models/deepseek-v3p2", "label": "deepseek-v3.2", "provider": "fireworks"},
     {"id": "fireworks/accounts/fireworks/models/kimi-k2p6", "label": "kimi-k2", "provider": "fireworks"},
-    {"id": "fireworks/accounts/fireworks/models/qwen3p6-plus", "label": "qwen-3.6", "provider": "fireworks"},
+    {"id": "fireworks/accounts/fireworks/models/deepseek-v4-pro", "label": "deepseek-v4(추론)", "provider": "fireworks"},
 ]
 
 
