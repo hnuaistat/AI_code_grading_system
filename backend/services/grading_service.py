@@ -299,7 +299,9 @@ async def grade_student_notebook(
         no_code_reason = None
         if not stu_cells:
             no_code_reason = "문제 마커 없음 — 미제출 처리"
-        elif not stu_code_cells:
+        elif not stu_code_cells and not has_markdown:
+            # 코드도 없고 마크다운도 없으면 진짜 미제출
+            # requires_code=False 문제에서 마크다운 답변만 있는 경우는 제외
             no_code_reason = "빈 코드 — 미제출 처리"
 
         # partial_score_criteria가 비어있거나 있으면 모두 AI 채점 시도

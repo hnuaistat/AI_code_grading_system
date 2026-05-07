@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { gradingAPI } from '../services/api';
 import { useAuth } from '../App';
 
@@ -353,6 +353,18 @@ function FeedbackPanel({ student, sessionId, onStudentUpdate }) {
 
 export default function StudentDetailModal({ student, sessionId, onClose, onStudentUpdate }) {
   const [currentStudent, setCurrentStudent] = useState(student);
+  const [fullStudent, setFullStudent] = useState(null);
+  const [cellsLoading, setCellsLoading] = useState(true);
+  const [cellsError, setCellsError] = useState('');
+
+  useEffect(() => {
+    setCellsLoading(true);
+    setCellsError('');
+    gradingAPI.getStudentDetail(sessionId, student.filename)
+      .then(res => setFullStudent(res.data))
+      .catch(() => setCellsError('노트북 데이터를 불러올 수 없습니다'))
+      .finally(() => setCellsLoading(false));
+  }, [sessionId, student.filename]);
 
   const handleStudentUpdate = (updated) => {
     setCurrentStudent(updated);
@@ -373,7 +385,13 @@ export default function StudentDetailModal({ student, sessionId, onClose, onStud
 
         {/* Split body */}
         <div style={s.body}>
-          <NotebookPanel student={currentStudent} />
+          {cellsLoading ? (
+            <div style={s.notebookLoading}>노트북 로딩 중...</div>
+          ) : cellsError ? (
+            <div style={s.notebookError}>{cellsError}</div>
+          ) : (
+            <NotebookPanel student={fullStudent} />
+          )}
           <div style={s.divider} />
           <FeedbackPanel
             student={currentStudent}
@@ -420,6 +438,14 @@ const s = {
   },
   divider: {
     width: 1, background: '#e2e8f0', flexShrink: 0,
+  },
+  notebookLoading: {
+    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: '#1e1e2e', color: '#6c7086', fontSize: 14,
+  },
+  notebookError: {
+    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: '#1e1e2e', color: '#f38ba8', fontSize: 14,
   },
 };
 

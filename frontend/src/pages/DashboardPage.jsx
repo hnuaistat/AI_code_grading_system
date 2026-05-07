@@ -32,13 +32,17 @@ export default function DashboardPage() {
     }
   }, [sessionId]);
 
+  // 최초 1회 로드
   useEffect(() => {
     fetchSession();
-    const interval = setInterval(() => {
-      if (session?.status !== 'completed' && session?.status !== 'quota_exceeded') fetchSession();
-    }, 2000);
+  }, [fetchSession]);
+
+  // 채점 중일 때만 2초 폴링 (완료/초과 시 자동 중단)
+  useEffect(() => {
+    if (session?.status === 'completed' || session?.status === 'quota_exceeded') return;
+    const interval = setInterval(fetchSession, 2000);
     return () => clearInterval(interval);
-  }, [fetchSession, session?.status]);
+  }, [session?.status, fetchSession]);
 
   const handleResume = async () => {
     if (!resumeAnswer || !resumeZip || !resumeCriteria) {
