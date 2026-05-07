@@ -777,6 +777,10 @@ async def get_history(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    from services.llm_service import AVAILABLE_MODELS
+    # model ID → label 매핑
+    model_label_map = {m["id"]: m["label"] for m in AVAILABLE_MODELS}
+
     records = (
         db.query(models.GradingSessionDB)
         .filter(models.GradingSessionDB.user_id == current_user["id"])
@@ -802,7 +806,7 @@ async def get_history(
             "status": r.status,
             "total_students": r.total_students,
             "processed_students": r.processed_students,
-            "grading_model": r.grading_model,
+            "grading_model": model_label_map.get(r.grading_model, r.grading_model),
             "created_at": _to_kst(r.created_at),
             "completed_at": _to_kst(r.completed_at) if r.completed_at else None,
         })
@@ -1606,6 +1610,9 @@ async def admin_list_sessions(
     db: Session = Depends(get_db)
 ):
     """전체 채점 세션 목록 (모든 사용자)."""
+    from services.llm_service import AVAILABLE_MODELS
+    model_label_map = {m["id"]: m["label"] for m in AVAILABLE_MODELS}
+
     records = (
         db.query(models.GradingSessionDB)
         .order_by(models.GradingSessionDB.created_at.desc())
@@ -1622,7 +1629,7 @@ async def admin_list_sessions(
             "status": r.status,
             "total_students": r.total_students,
             "processed_students": r.processed_students,
-            "grading_model": r.grading_model,
+            "grading_model": model_label_map.get(r.grading_model, r.grading_model),
             "created_at": _to_kst(r.created_at),
             "completed_at": _to_kst(r.completed_at) if r.completed_at else None,
         })

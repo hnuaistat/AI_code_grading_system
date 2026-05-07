@@ -75,7 +75,18 @@ export default function DashboardPage() {
       const url = URL.createObjectURL(new Blob([res.data]));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `grading_results.xlsx`;
+
+      // 백엔드 Content-Disposition 헤더에서 파일명 추출
+      const disposition = res.headers['content-disposition'] || res.headers['Content-Disposition'] || '';
+      let filename = 'grading_results.xlsx';
+      const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+      const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+      if (utf8Match) {
+        filename = decodeURIComponent(utf8Match[1]);
+      } else if (plainMatch) {
+        filename = plainMatch[1];
+      }
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -104,7 +115,8 @@ export default function DashboardPage() {
     <div style={s.page}>
       <header style={s.header}>
         <div style={s.headerLeft}>
-          <button style={s.backBtn} onClick={() => navigate('/upload')}>← 새 채점</button>
+          <button style={s.backBtn} onClick={() => navigate('/history')}>← 채점 기록</button>
+          <button style={s.backBtn} onClick={() => navigate('/upload')}>새 채점</button>
           <span style={s.headerTitle}>채점 결과 대시보드</span>
         </div>
         <div style={s.headerRight}>
