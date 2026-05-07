@@ -347,7 +347,7 @@ async def grade_with_ai(
     try:
         response = await _call_with_retry(lambda: client.chat.completions.create(
             model=model_name,
-            max_tokens=2048,
+            max_tokens=4096,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
