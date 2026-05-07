@@ -200,12 +200,10 @@ function SessionsTab({ sessions }) {
     if (s === 'quota_exceeded') return '#dc2626';
     return '#64748b';
   };
-  const renderModel = (model) => {
+  const renderModel = (model, label) => {
     if (!model) return <span style={{ color: '#cbd5e1' }}>—</span>;
-    const [provider, ...rest] = model.split('/');
-    const shortName = provider === 'fireworks'
-      ? rest.join('/').split('/').pop()
-      : rest.join('/');
+    const provider = model.split('/')[0];
+    const shortName = label || model.split('/').pop();
     const cfg = provider === 'fireworks'
       ? { bg: '#fef3c7', color: '#b45309' }
       : { bg: '#dbeafe', color: '#1d4ed8' };
@@ -246,7 +244,7 @@ function SessionsTab({ sessions }) {
               <td style={c.td}><span style={{ color: statusColor(s.status), fontWeight: 600 }}>{s.status}</span></td>
               <td style={c.td}>{s.total_students}</td>
               <td style={c.td}>{s.processed_students}</td>
-              <td style={c.td}>{renderModel(s.grading_model)}</td>
+              <td style={c.td}>{renderModel(s.grading_model, s.grading_model_label)}</td>
               <td style={c.td}>{s.created_at?.slice(0, 16).replace('T', ' ')}</td>
             </tr>
           ))}

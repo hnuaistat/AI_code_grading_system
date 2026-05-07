@@ -25,14 +25,11 @@ function StatusBadge({ status }) {
   );
 }
 
-function ModelBadge({ model }) {
-  // model: "openai/gpt-4o-mini" | "fireworks/accounts/fireworks/models/llama-v3p1-70b-instruct"
-  const [provider, ...rest] = model.split('/');
-  const modelName = rest.join('/');
-  // 긴 fireworks 경로는 마지막 segment만 표시
-  const shortName = provider === 'fireworks'
-    ? modelName.split('/').pop()
-    : modelName;
+function ModelBadge({ model, label }) {
+  // model: full ID (e.g. "openai/gpt-4o-mini" 또는 "fireworks/accounts/fireworks/models/...")
+  // label: 짧은 표시 라벨 (백엔드에서 제공)
+  const provider = (model || '').split('/')[0];
+  const displayName = label || (model || '').split('/').pop() || '-';
   const cfg = provider === 'fireworks'
     ? { bg: '#fef3c7', color: '#b45309' }
     : { bg: '#dbeafe', color: '#1d4ed8' };
@@ -47,7 +44,7 @@ function ModelBadge({ model }) {
         display: 'inline-block',
       }}
     >
-      {shortName}
+      {displayName}
     </span>
   );
 }
@@ -220,7 +217,7 @@ export default function HistoryPage() {
                         </td>
                         <td style={{ ...td, textAlign: 'center' }}>
                           {session.grading_model ? (
-                            <ModelBadge model={session.grading_model} />
+                            <ModelBadge model={session.grading_model} label={session.grading_model_label} />
                           ) : (
                             <span style={{ color: '#cbd5e1', fontSize: 12 }}>—</span>
                           )}
