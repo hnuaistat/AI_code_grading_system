@@ -663,12 +663,52 @@ async def get_session(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Check in-memory first (active sessions)
+    def _strip(r: dict) -> dict:
+        """code_cells/preamble_cells 제거 (base64 이미지 등 대용량 데이터 제외)"""
+        for p in r.get("problems", []):
+            p["code_cells"] = []
+            p["preamble_cells"] = []
+        return r
+
     session = grading_sessions.get(session_id)
     if session:
-        return session
+        # 인메모리 세션: 수동 직렬화로 대용량 셀 제외
+        results_stripped = []
+        for r in session.results:
+            results_stripped.append({
+                "filename": r.filename,
+                "student_id": r.student_id,
+                "student_name": r.student_name,
+                "total_score": r.total_score,
+                "max_total_score": r.max_total_score,
+                "error": r.error,
+                "problems": [{
+                    "problem_id": p.problem_id,
+                    "full_score": p.full_score,
+                    "obtained_score": p.obtained_score,
+                    "output_match": p.output_match,
+                    "partial_scores": [ps.dict() for ps in p.partial_scores],
+                    "ai_feedback": p.ai_feedback,
+                    "code_cells": [],
+                    "preamble_cells": [],
+                    "problem_description": p.problem_description,
+                    "professor_feedback": p.professor_feedback,
+                    "is_revised": p.is_revised,
+                    "revised_at": p.revised_at,
+                } for p in r.problems],
+            })
+        return {
+            "session_id": session.session_id,
+            "status": session.status,
+            "progress": session.progress,
+            "current_student": session.current_student,
+            "total_students": session.total_students,
+            "processed_students": session.processed_students,
+            "results": results_stripped,
+            "error": session.error,
+        }
 
-    # Load from DB (past sessions after restart)
+    # DB에서 로드
     db_record = db.query(models.GradingSessionDB).filter(
         models.GradingSessionDB.id == session_id
     ).first()
@@ -678,19 +718,48 @@ async def get_session(
     results = []
     if db_record.results_json:
         try:
-            results = [StudentResult(**r) for r in json.loads(db_record.results_json)]
+            results = [_strip(r) for r in json.loads(db_record.results_json)]
         except Exception:
             pass
 
-    return GradingSession(
-        session_id=session_id,
-        status=db_record.status,
-        progress=100.0 if db_record.status == "completed" else db_record.progress,
-        total_students=db_record.total_students,
-        processed_students=db_record.processed_students,
-        results=results,
-        error=db_record.error,
-    )
+    return {
+        "session_id": session_id,
+        "status": db_record.status,
+        "progress": 100.0 if db_record.status == "completed" else db_record.progress,
+        "current_student": None,
+        "total_students": db_record.total_students,
+        "processed_students": db_record.processed_students,
+        "results": results,
+        "error": db_record.error,
+    }
+
+
+@app.get("/grading/session/{session_id}/student")
+async def get_student_detail(
+    session_id: str,
+    filename: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """특정 학생의 전체 데이터(code_cells/preamble_cells 포함) 조회 — 모달 열 때만 호출"""
+    mem_session = grading_sessions.get(session_id)
+    if mem_session:
+        student = next((r for r in mem_session.results if r.filename == filename), None)
+        if student:
+            return student
+
+    db_record = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.id == session_id
+    ).first()
+    if not db_record or not db_record.results_json:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    raw = json.loads(db_record.results_json)
+    student_data = next((r for r in raw if r.get("filename") == filename), None)
+    if not student_data:
+        raise HTTPException(status_code=404, detail="학생 데이터를 찾을 수 없습니다")
+
+    return student_data
 
 
 @app.get("/grading/history")
@@ -1044,156 +1113,211 @@ async def download_excel(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    session = grading_sessions.get(session_id)
-    results = []
-    if session and session.status == "completed":
-        results = session.results
+    # DB 레코드 항상 조회 (수정 반영 + 유효성 검사용)
+    db_record = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.id == session_id
+    ).first()
+    if not db_record or db_record.status != "completed":
+        raise HTTPException(status_code=400, detail="채점이 완료되지 않았습니다")
+
+    # 원본 AI 점수: 인메모리 우선(수정 전 원점수), 없으면 DB
+    mem_session = grading_sessions.get(session_id)
+    if mem_session and mem_session.status == "completed":
+        original_results = mem_session.results
+    elif db_record.results_json:
+        original_results = [StudentResult(**r) for r in json.loads(db_record.results_json)]
     else:
-        db_record = db.query(models.GradingSessionDB).filter(
-            models.GradingSessionDB.id == session_id
-        ).first()
-        if not db_record or db_record.status != "completed":
-            raise HTTPException(status_code=400, detail="채점이 완료되지 않았습니다")
-        if db_record.results_json:
-            results = [StudentResult(**r) for r in json.loads(db_record.results_json)]
+        original_results = []
+
+    # 수정 후 점수: 항상 DB (교수 수정사항 반영)
+    if db_record.results_json:
+        revised_results = [StudentResult(**r) for r in json.loads(db_record.results_json)]
+    else:
+        revised_results = original_results
 
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
-    from services.notebook_service import parse_notebook
-
-    def extract_name_and_id(nb_content: bytes):
-        """노트북 첫 번째 셀에서 학번/이름 추출. 예: '# 학번 :20222500\n# 이름 :배대환'"""
-        try:
-            nb = parse_notebook(nb_content)
-            if nb.cells:
-                src = nb.cells[0].source if isinstance(nb.cells[0].source, str) else ''.join(nb.cells[0].source)
-                student_id, name = "", ""
-                for line in src.split('\n'):
-                    line = line.strip().lstrip('#').strip()
-                    if line.startswith('학번'):
-                        student_id = line.split(':', 1)[-1].strip()
-                    elif line.startswith('이름'):
-                        name = line.split(':', 1)[-1].strip()
-                return student_id, name
-        except Exception:
-            pass
-        return "", ""
-
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "채점결과"
 
     header_font = Font(bold=True, color="FFFFFF")
-    header_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+    ai_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+    revised_fill = PatternFill(start_color="16A34A", end_color="16A34A", fill_type="solid")
+    highlight_fill = PatternFill(start_color="FEF08A", end_color="FEF08A", fill_type="solid")
     center_align = Alignment(horizontal="center", vertical="center")
+    wrap_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
     thin_border = Border(
         left=Side(style='thin'), right=Side(style='thin'),
         top=Side(style='thin'), bottom=Side(style='thin')
     )
 
-    all_problem_ids = []
-    if results:
+    def get_problem_ids(results):
+        ids = []
         for r in results:
             for p in r.problems:
-                if p.problem_id not in all_problem_ids:
-                    all_problem_ids.append(p.problem_id)
-    all_problem_ids.sort()
+                if p.problem_id not in ids:
+                    ids.append(p.problem_id)
+        ids.sort()
+        return ids
 
-    # 헤더: 학번, 이름, 문제별 점수, 총점, 순위
-    headers = ["학번", "이름"]
-    for pid in all_problem_ids:
-        problem = next((p for r in results for p in r.problems if p.problem_id == pid), None)
-        max_s = problem.full_score if problem else 0
-        # pid가 이미 "Q1" 형식이면 그대로, 아니면 앞에 Q 추가
+    def build_rank_map(results):
+        score_list = [(i, s.total_score) for i, s in enumerate(results)]
+        score_list.sort(key=lambda x: x[1], reverse=True)
+        rank_map = {}
+        for rank, (i, score) in enumerate(score_list, 1):
+            if rank > 1 and score == score_list[rank - 2][1]:
+                rank_map[i] = rank_map[score_list[rank - 2][0]]
+            else:
+                rank_map[i] = rank
+        return rank_map
+
+    def apply_sheet_style(ws, results, headers):
+        for col in range(1, len(headers) + 1):
+            max_len = max(
+                (len(str(ws.cell(row=r, column=col).value or "")) for r in range(1, len(results) + 2)),
+                default=0
+            )
+            ws.column_dimensions[get_column_letter(col)].width = min(max(max_len + 4, 12), 50)
+        ws.freeze_panes = "C2"
+
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: AI 채점결과 (원본) ──────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "AI채점결과"
+    pids = get_problem_ids(original_results)
+    headers1 = ["학번", "이름"]
+    for pid in pids:
+        prob = next((p for r in original_results for p in r.problems if p.problem_id == pid), None)
         pid_str = str(pid) if str(pid).startswith('Q') else f"Q{pid}"
-        headers.append(f"{pid_str} ({max_s}점)")
-    headers.extend(["총점", "순위"])
+        headers1.append(f"{pid_str} ({prob.full_score if prob else 0}점)")
+    headers1.extend(["총점", "순위"])
 
-    for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
+    for col, h in enumerate(headers1, 1):
+        cell = ws1.cell(row=1, column=col, value=h)
         cell.font = header_font
-        cell.fill = header_fill
+        cell.fill = ai_fill
         cell.alignment = center_align
         cell.border = thin_border
 
-    # 총점 기준 순위 계산
-    score_list = [(i, s.total_score) for i, s in enumerate(results)]
-    score_list.sort(key=lambda x: x[1], reverse=True)
-    rank_map = {}
-    for rank, (i, score) in enumerate(score_list, 1):
-        # 동점 처리
-        if rank > 1 and score == score_list[rank - 2][1]:
-            rank_map[i] = rank_map[score_list[rank - 2][0]]
-        else:
-            rank_map[i] = rank
-
-    for row_idx, (orig_idx, student) in enumerate([(i, s) for i, s in enumerate(results)], 2):
-        ws.cell(row=row_idx, column=1, value=student.student_id)
-        ws.cell(row=row_idx, column=2, value=student.student_name or "")
+    rank_map1 = build_rank_map(original_results)
+    for row_idx, (orig_idx, student) in enumerate(list(enumerate(original_results)), 2):
+        ws1.cell(row=row_idx, column=1, value=student.student_id)
+        ws1.cell(row=row_idx, column=2, value=student.student_name or "")
         col = 3
-        for pid in all_problem_ids:
+        for pid in pids:
             p = next((p for p in student.problems if p.problem_id == pid), None)
-            ws.cell(row=row_idx, column=col, value=p.obtained_score if p else 0)
+            ws1.cell(row=row_idx, column=col, value=p.obtained_score if p else 0)
             col += 1
-        ws.cell(row=row_idx, column=col, value=student.total_score)
-        ws.cell(row=row_idx, column=col + 1, value=rank_map[orig_idx])
-        for c in range(1, len(headers) + 1):
-            ws.cell(row=row_idx, column=c).border = thin_border
-            ws.cell(row=row_idx, column=c).alignment = center_align
+        ws1.cell(row=row_idx, column=col, value=student.total_score)
+        ws1.cell(row=row_idx, column=col + 1, value=rank_map1[orig_idx])
+        for c in range(1, len(headers1) + 1):
+            ws1.cell(row=row_idx, column=c).border = thin_border
+            ws1.cell(row=row_idx, column=c).alignment = center_align
 
-    # 열 너비 자동 조정
-    for col in range(1, len(headers) + 1):
-        max_len = max(
-            len(str(ws.cell(row=r, column=col).value or ""))
-            for r in range(1, len(results) + 2)
-        )
-        ws.column_dimensions[get_column_letter(col)].width = max(max_len + 4, 12)
+    apply_sheet_style(ws1, original_results, headers1)
 
-    # 학번, 이름 열(A, B) 고정
-    ws.freeze_panes = "C2"
-
-    ws2 = wb.create_sheet("상세채점")
-    detail_headers = ["학번", "이름", "문제", "채점항목", "최대점수", "획득점수", "피드백"]
+    # ── Sheet 2: AI 분석결과 (세부 채점항목) ─────────────────────────────
+    ws2 = wb.create_sheet("AI분석결과")
+    detail_headers = ["학번", "이름", "문제", "채점항목", "최대점수", "획득점수", "AI피드백"]
     for col, h in enumerate(detail_headers, 1):
         cell = ws2.cell(row=1, column=col, value=h)
         cell.font = header_font
-        cell.fill = header_fill
+        cell.fill = ai_fill
         cell.alignment = center_align
         cell.border = thin_border
 
     row = 2
-    for student in results:
+    for student in original_results:
         for problem in student.problems:
             for ps in problem.partial_scores:
-                ws2.cell(row=row, column=1, value=student.student_id)
-                ws2.cell(row=row, column=2, value=student.student_name or "")
-                ws2.cell(row=row, column=3, value=f"Q{problem.problem_id}")
-                ws2.cell(row=row, column=4, value=ps.item)
-                ws2.cell(row=row, column=5, value=ps.max_score)
-                ws2.cell(row=row, column=6, value=ps.score)
-                ws2.cell(row=row, column=7, value=ps.reason)
+                ws2.cell(row=row, column=1, value=student.student_id).alignment = center_align
+                ws2.cell(row=row, column=2, value=student.student_name or "").alignment = center_align
+                ws2.cell(row=row, column=3, value=f"Q{problem.problem_id}").alignment = center_align
+                ws2.cell(row=row, column=4, value=ps.item).alignment = center_align
+                ws2.cell(row=row, column=5, value=ps.max_score).alignment = center_align
+                ws2.cell(row=row, column=6, value=ps.score).alignment = center_align
+                ws2.cell(row=row, column=7, value=ps.reason).alignment = wrap_align
                 for c in range(1, 8):
                     ws2.cell(row=row, column=c).border = thin_border
                 row += 1
 
     for col in range(1, 8):
         max_len = max(
-            len(str(ws2.cell(r2, col).value or "")) for r2 in range(1, row)
+            (len(str(ws2.cell(r2, col).value or "")) for r2 in range(1, row)),
+            default=0
         )
         ws2.column_dimensions[get_column_letter(col)].width = min(max_len + 4, 60)
-
     ws2.freeze_panes = "C2"
+
+    # ── Sheet 3: 수정후채점결과 (교수 수정점수 + 코멘트) ─────────────────
+    ws3 = wb.create_sheet("수정후채점결과")
+    pids_rev = get_problem_ids(revised_results)
+    headers3 = ["학번", "이름"]
+    for pid in pids_rev:
+        prob = next((p for r in revised_results for p in r.problems if p.problem_id == pid), None)
+        pid_str = str(pid) if str(pid).startswith('Q') else f"Q{pid}"
+        headers3.append(f"{pid_str} ({prob.full_score if prob else 0}점)")
+        headers3.append(f"{pid_str} 교수코멘트")
+    headers3.extend(["총점", "순위"])
+
+    for col, h in enumerate(headers3, 1):
+        cell = ws3.cell(row=1, column=col, value=h)
+        cell.font = header_font
+        cell.fill = revised_fill
+        cell.alignment = center_align
+        cell.border = thin_border
+
+    rank_map3 = build_rank_map(revised_results)
+    for row_idx, (orig_idx, student) in enumerate(list(enumerate(revised_results)), 2):
+        ws3.cell(row=row_idx, column=1, value=student.student_id).alignment = center_align
+        ws3.cell(row=row_idx, column=2, value=student.student_name or "").alignment = center_align
+        col = 3
+        for pid in pids_rev:
+            p = next((p for p in student.problems if p.problem_id == pid), None)
+            score_cell = ws3.cell(row=row_idx, column=col, value=p.obtained_score if p else 0)
+            score_cell.alignment = center_align
+            if p and p.is_revised:
+                score_cell.fill = highlight_fill
+            col += 1
+            comment_cell = ws3.cell(row=row_idx, column=col, value=p.professor_feedback if p and p.professor_feedback else "")
+            comment_cell.alignment = wrap_align
+            col += 1
+        ws3.cell(row=row_idx, column=col, value=student.total_score).alignment = center_align
+        ws3.cell(row=row_idx, column=col + 1, value=rank_map3[orig_idx]).alignment = center_align
+        for c in range(1, len(headers3) + 1):
+            ws3.cell(row=row_idx, column=c).border = thin_border
+
+    for col in range(1, len(headers3) + 1):
+        max_len = max(
+            (len(str(ws3.cell(row=r, column=col).value or "")) for r in range(1, len(revised_results) + 2)),
+            default=0
+        )
+        # 교수코멘트 열은 더 넓게
+        is_comment_col = col >= 3 and (col - 3) % 2 == 1 and col < len(headers3) - 1
+        ws3.column_dimensions[get_column_letter(col)].width = min(max(max_len + 4, 12), 50 if is_comment_col else 20)
+    ws3.freeze_panes = "C2"
 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
 
+    # 파일명: 과목이름_세부항목_MMDD.xlsx
+    subject = db.query(models.Subject).filter(models.Subject.id == db_record.subject_id).first() if db_record.subject_id else None
+    item = db.query(models.SubjectItem).filter(models.SubjectItem.id == db_record.subject_item_id).first() if db_record.subject_item_id else None
+    date_src = db_record.completed_at or db_record.created_at
+    date_str = date_src.strftime("%m%d") if date_src else session_id[:8]
+    subject_name = subject.name if subject else "채점결과"
+    item_name = item.name if item else ""
+    parts = [p for p in [subject_name, item_name, date_str] if p]
+    filename = "_".join(parts) + ".xlsx"
+    # 파일명에서 공백·특수문자 제거
+    import re
+    filename = re.sub(r'[\\/:*?"<>|\s]', '_', filename)
+
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename=grading_results_{session_id[:8]}.xlsx"}
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"}
     )
 
 

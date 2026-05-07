@@ -58,6 +58,7 @@ export const gradingAPI = {
   downloadExcel: (sessionId) => API.get(`/grading/session/${sessionId}/download`, { responseType: 'blob' }),
   getHistory: () => API.get('/grading/history'),
   reviseProblem: (sessionId, payload) => API.patch(`/grading/session/${sessionId}/revise`, payload),
+  getStudentDetail: (sessionId, filename) => API.get(`/grading/session/${sessionId}/student`, { params: { filename } }),
   getRevisions: (sessionId) => API.get(`/grading/session/${sessionId}/revisions`),
   getAllRevisions: () => API.get('/grading/all-revisions'),
   getAvailableModels: () => API.get('/grading/available-models'),
