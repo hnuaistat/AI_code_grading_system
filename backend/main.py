@@ -44,6 +44,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 # In-memory active sessions
@@ -806,7 +807,8 @@ async def get_history(
             "status": r.status,
             "total_students": r.total_students,
             "processed_students": r.processed_students,
-            "grading_model": model_label_map.get(r.grading_model, r.grading_model),
+            "grading_model": r.grading_model,
+            "grading_model_label": model_label_map.get(r.grading_model, r.grading_model),
             "created_at": _to_kst(r.created_at),
             "completed_at": _to_kst(r.completed_at) if r.completed_at else None,
         })
@@ -1629,7 +1631,8 @@ async def admin_list_sessions(
             "status": r.status,
             "total_students": r.total_students,
             "processed_students": r.processed_students,
-            "grading_model": model_label_map.get(r.grading_model, r.grading_model),
+            "grading_model": r.grading_model,
+            "grading_model_label": model_label_map.get(r.grading_model, r.grading_model),
             "created_at": _to_kst(r.created_at),
             "completed_at": _to_kst(r.completed_at) if r.completed_at else None,
         })
