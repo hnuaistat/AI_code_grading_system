@@ -23,8 +23,8 @@ AVAILABLE_MODELS = [
     {"id": "openai/gpt-4o", "label": "gpt-4o", "provider": "openai"},
     {"id": "openai/gpt-4.1-mini", "label": "gpt-4.1-mini", "provider": "openai"},
     {"id": "fireworks/accounts/fireworks/models/deepseek-v3p2", "label": "deepseek-v3.2", "provider": "fireworks"},
-    {"id": "fireworks/accounts/fireworks/models/kimi-k2p6", "label": "kimi-k2", "provider": "fireworks"},
-    {"id": "fireworks/accounts/fireworks/models/deepseek-v4-pro", "label": "deepseek-v4(추론)", "provider": "fireworks"},
+    {"id": "fireworks/accounts/fireworks/models/kimi-k2-instruct", "label": "kimi-k2", "provider": "fireworks"},
+    {"id": "fireworks/accounts/fireworks/models/qwen3p5-35b-a3b", "label": "qwen3.5-35b", "provider": "fireworks"},
 ]
 
 
@@ -186,6 +186,13 @@ async def generate_rubric_with_ai(
                 content = "\n".join(lines[1:-1])
             else:
                 content = "\n".join(lines[1:])
+
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start != -1 and end > start:
+            content = content[start:end]
+        else:
+            print(f"[PARSE ERROR] JSON 없음 | model={model} | content={content[:300]!r}")
 
         rubric = json.loads(content)
         return rubric
@@ -370,6 +377,13 @@ async def grade_with_ai(
             else:
                 content = "\n".join(lines[1:])
 
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start != -1 and end > start:
+            content = content[start:end]
+        else:
+            print(f"[PARSE ERROR] JSON 없음 | model={model} | problem={problem_id} | content={content[:300]!r}")
+
         data = json.loads(content)
         rubric_scores = data.get("rubric_scores", [])
         overall_feedback = data.get("feedback", "")
@@ -399,6 +413,7 @@ async def grade_with_ai(
         return graded, overall_feedback, tokens_used
 
     except json.JSONDecodeError as e:
+        print(f"[PARSE ERROR] JSONDecodeError | model={model} | problem={problem_id} | content={content[:300]!r} | error={e}")
         return [
             {
                 "item": c.item,
