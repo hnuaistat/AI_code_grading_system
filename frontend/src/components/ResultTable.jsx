@@ -91,9 +91,26 @@ export default function ResultTable({ results, onSelectStudent }) {
                     return (
                       <td key={pid} style={{ ...td, textAlign: 'center', backgroundColor: p?.has_ai_error ? '#fef3c7' : 'transparent' }}>
                         {p ? (
-                          <span style={{ color: p.obtained_score === p.full_score ? '#059669' : '#d97706', fontWeight: 600 }}>
-                            {p.obtained_score.toFixed(2)}
-                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                            <span style={{ color: p.obtained_score === p.full_score ? '#059669' : '#d97706', fontWeight: 600 }}>
+                              {p.obtained_score.toFixed(2)}
+                            </span>
+                            {p.has_ai_error && (
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: 20,
+                                height: 20,
+                                borderRadius: '50%',
+                                backgroundColor: 'rgba(255, 140, 0, 0.25)',
+                                border: '2px solid #ff8c00',
+                                fontSize: 12,
+                                fontWeight: 700,
+                                color: '#ff8c00'
+                              }}>!</span>
+                            )}
+                          </div>
                         ) : <span style={{ color: '#e2e8f0' }}>-</span>}
                       </td>
                     );

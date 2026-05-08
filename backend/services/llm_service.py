@@ -170,7 +170,7 @@ async def generate_rubric_with_ai(
         response = await _call_with_retry(lambda: client.chat.completions.create(
             model=model_name,
             max_tokens=4096,
-            temperature=0,
+            temperature=1.0,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -349,7 +349,7 @@ async def grade_with_ai(
         response = await _call_with_retry(lambda: client.chat.completions.create(
             model=model_name,
             max_tokens=4096,
-            temperature=0,
+            temperature=1.0,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
