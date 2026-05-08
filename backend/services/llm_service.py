@@ -290,46 +290,31 @@ async def grade_with_ai(
      - 코드 구현의 완성도, 효율성, 가독성 등을 종합 평가하여 추가 점수 부여
      - 코드가 에러나면 → 추가 배점 0점"""
     consistency_instruction = "feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_score와 같아야 합니다."
-    score_field_desc = '"score": "0 또는 max_score만 (예: max_score가 2이면 0 또는 2. 중간값 없음)"'
 
-    system_prompt = f"""당신은 현업 시니어 개발자이자 꼼꼼한 컴퓨터공학 전공 조교입니다.
+    system_prompt = f"""⚠️ **중요**: 반드시 유효한 JSON만 출력하세요. 마크다운, 설명, 다른 텍스트를 절대 포함하지 마세요.
+
+당신은 현업 시니어 개발자이자 꼼꼼한 컴퓨터공학 전공 조교입니다.
 {global_guideline_text}{remaining_info}
 
 ## 채점 원칙
-1. **다양성 존중**: 학생의 구현 방식이 모범 답안과 다르더라도, 논리가 타당하고 결과가 올바르면 정답으로 인정하세요.
-   - List Comprehension, Map/Filter, 일반 For 루프 등 모든 풀이 방식을 동등하게 평가합니다.
-
+1. **다양성 존중**: 학생의 구현 방식이 모범 답안과 다르더라도, 논리가 타당하고 결과가 올바르면 정답으로 인정.
 {scoring_instruction}
 
-3. **해설과 점수의 일관성**: reason(해설)에서 해당 항목이 완전히 충족되었다고 판단했으면, 반드시 score를 max_score와 동일하게 부여하세요. 해설과 점수가 불일치하면 안 됩니다.
-
-4. **피드백 원칙**: 잘한 점을 간단히 인정하세요. 개선할 점은 **실제 오류나 문제 요구사항 미충족**에 한해서만 언급하세요.
-   - 코드 스타일, 주석 부족, 변수명, 가독성 개선 등 사소한 제안은 하지 마세요.
-   - 정답을 맞춘 코드에 대해 "더 좋은 방법"을 제안하지 마세요.
-   - 피드백은 짧고 핵심만 전달하세요.
+3. **해설과 점수의 일관성**: {consistency_instruction}
 
 ## 평가 절차
-1. Analysis: 학생 코드의 핵심 로직과 문제별 evaluation_guideline 달성도 분석
-2. Rubric Evaluation: 각 항목별 달성 정도를 근거와 함께 점수 부여
-3. Feedback: 잘한 점과 개선 방향을 친절하게 설명
+1. Analysis: 학생 코드 분석
+2. Rubric Evaluation: 각 항목별 점수 부여
+3. Feedback: 평가 종합
 
-반드시 다음 JSON 형식으로만 응답하세요. 반드시 아래 순서대로 작성하세요:
-1. analysis로 코드를 먼저 분석하고
-2. feedback으로 종합 평가를 내린 뒤
-3. 그 판단을 바탕으로 rubric_scores에 점수와 근거를 작성하세요.
-{consistency_instruction}
+**응답 형식: 반드시 아래 JSON만 반환 (마크다운 X)**
+⚠️ score는 반드시 0 또는 max_score만 (중간값 금지)
 
 {{
-  "analysis": "학생 코드의 핵심 로직과 문제 가이드라인 달성도에 대한 설명",
-  "feedback": "잘한 점, 개선할 점, 제안사항 — 이 판단이 아래 점수 부여의 근거가 됩니다",
+  "analysis": "핵심 로직과 달성도 분석",
+  "feedback": "잘한 점과 개선점",
   "rubric_scores": [
-    {{
-  "item": "항목명",
-  {score_field_desc},
-  "max_score": 최대점수,
-  "reason": "위 feedback을 근거로 한 해설"
-}},
-    ...
+    {{"item": "항목명", "score": 0 또는 max_score, "max_score": 최대점수, "reason": "근거"}}
   ],
   "total_score": 합계
 }}"""
@@ -341,21 +326,20 @@ async def grade_with_ai(
 
     user_prompt = f"""[문제 {problem_id}] 다음 학생 코드를 평가해주세요.{guideline_text}
 
-## 모범 답안 (참고 자료 - 구현 방식이 다르면 틀린 것 아님)
+## 모범 답안
 ```python
-{answer_code[:2000]}
+{answer_code[:1500]}
 ```
 
 ## 학생 코드
 ```python
-{student_code[:3000]}
+{student_code[:2000]}
 ```{execution_context}
 
-## 채점 루브릭 (부분 점수 기준)
+## 채점 루브릭
 {rubric_text}
 
-위의 평가 가이드라인과 루브릭에 기반하여 학생 코드를 평가하세요.
-모범 답안의 구현 방식과 다르더라도, 문제를 올바르게 해결했고 기준들을 충족한다면 정답으로 인정하세요."""
+위 루브릭에 따라 평가하고, 반드시 JSON으로만 응답하세요."""
 
     client, model_name = get_llm_client(model or DEFAULT_MODEL)
 
