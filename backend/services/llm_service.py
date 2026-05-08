@@ -373,17 +373,12 @@ async def grade_with_ai(
         else:
             print(f"[PARSE ERROR] JSON 없음 | model={model} | problem={problem_id} | content={content[:300]!r}")
 
-        # JSON 파싱 시도 (줄바꿈 이스케이프 재시도)
+        # JSON 파싱 (json5는 줄바꿈, 특수문자 등 허용)
         try:
-            data = json.loads(content)
-        except json.JSONDecodeError as e:
-            print(f"[JSON Parse Retry] 첫 시도 실패, 줄바꿈 정제 후 재시도: {e}")
-            content_cleaned = content.replace('\n', ' ').replace('\r', ' ')
-            try:
-                data = json.loads(content_cleaned)
-            except json.JSONDecodeError:
-                print(f"[JSON Parse Failed] 재시도 후에도 실패")
-                raise
+            data = json5.loads(content)
+        except Exception as e:
+            print(f"[JSON5 Parse Error] {e}")
+            raise
         rubric_scores = data.get("rubric_scores", [])
         overall_feedback = data.get("feedback", "")
 
