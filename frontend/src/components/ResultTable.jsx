@@ -89,7 +89,7 @@ export default function ResultTable({ results, onSelectStudent }) {
                   {allProblemIds.map(pid => {
                     const p = student.problems.find(p => p.problem_id === pid);
                     return (
-                      <td key={pid} style={{ ...td, textAlign: 'center' }}>
+                      <td key={pid} style={{ ...td, textAlign: 'center', backgroundColor: p?.has_ai_error ? '#fef3c7' : 'transparent' }}>
                         {p ? (
                           <span style={{ color: p.obtained_score === p.full_score ? '#059669' : '#d97706', fontWeight: 600 }}>
                             {p.obtained_score.toFixed(2)}

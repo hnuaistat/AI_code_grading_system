@@ -313,6 +313,7 @@ async def grade_student_notebook(
             no_code_reason = "빈 코드 — 미제출 처리"
 
         # partial_score_criteria가 비어있거나 있으면 모두 AI 채점 시도
+        has_ai_error = False
         if no_code_reason is None:
             await asyncio.sleep(1)
             try:
@@ -339,6 +340,7 @@ async def grade_student_notebook(
             except APIQuotaError:
                 raise
             except Exception as e:
+                has_ai_error = True
                 for c in working_criteria:
                     ai_partial_scores.append(PartialScoreResult(
                         item=c.item,
@@ -367,7 +369,8 @@ async def grade_student_notebook(
             ai_feedback=ai_overall,
             code_cells=nb_cells,
             preamble_cells=nb_preamble,
-            problem_description=problem_description
+            problem_description=problem_description,
+            has_ai_error=has_ai_error
         ))
 
     return problem_results, execution_error, total_tokens

@@ -112,6 +112,7 @@ class ProblemResult(BaseModel):
     professor_feedback: Optional[str] = None
     is_revised: bool = False
     revised_at: Optional[str] = None
+    has_ai_error: bool = False  # AI 채점 오류 여부
 
 
 class StudentResult(BaseModel):
