@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Tuple, Optional
 import httpx
 from openai import AsyncOpenAI
 import openai
+import json5
 from schemas import PartialScoreCriterion
 
 
@@ -192,17 +193,12 @@ async def generate_rubric_with_ai(
         else:
             print(f"[PARSE ERROR] JSON 없음 | model={model} | content={content[:300]!r}")
 
-        # JSON 파싱 시도 (줄바꿈 이스케이프 재시도)
+        # JSON 파싱 (json5는 줄바꿈, 단일따옴표 등 허용)
         try:
-            rubric = json.loads(content)
-        except json.JSONDecodeError as e:
-            print(f"[JSON Parse Retry] 첫 시도 실패, 줄바꿈 정제 후 재시도: {e}")
-            content_cleaned = content.replace('\n', ' ').replace('\r', ' ')
-            try:
-                rubric = json.loads(content_cleaned)
-            except json.JSONDecodeError:
-                print(f"[JSON Parse Failed] 재시도 후에도 실패")
-                raise
+            rubric = json5.loads(content)
+        except Exception as e:
+            print(f"[JSON5 Parse Error] {e}")
+            raise
         return rubric
 
     except APIQuotaError:
@@ -326,20 +322,21 @@ async def grade_with_ai(
 
     user_prompt = f"""[문제 {problem_id}] 다음 학생 코드를 평가해주세요.{guideline_text}
 
-## 모범 답안
+## 모범 답안 (참고 자료 - 구현 방식이 다르면 틀린 것 아님)
 ```python
-{answer_code[:1500]}
+{answer_code[:2000]}
 ```
 
 ## 학생 코드
 ```python
-{student_code[:2000]}
+{student_code[:3000]}
 ```{execution_context}
 
-## 채점 루브릭
+## 채점 루브릭 (부분 점수 기준)
 {rubric_text}
 
-위 루브릭에 따라 평가하고, 반드시 JSON으로만 응답하세요."""
+위의 평가 가이드라인과 루브릭에 기반하여 학생 코드를 평가하세요.
+모범 답안의 구현 방식과 다르더라도, 문제를 올바르게 해결했고 기준들을 충족한다면 정답으로 인정하세요."""
 
     client, model_name = get_llm_client(model or DEFAULT_MODEL)
 
