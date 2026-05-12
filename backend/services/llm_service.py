@@ -377,12 +377,16 @@ async def grade_with_ai(
         content = response.choices[0].message.content
         tokens_used = response.usage.total_tokens if response.usage else 0
 
+        print(f"[DEBUG] 응답 상태 | model={model} | problem={problem_id} | 길이={len(content) if content else 0}")
+
         if not content:
-            print(f"[ERROR] 빈 응답 수신 (model={model}, problem={problem_id}), response={response}")
+            print(f"[ERROR] 빈 응답 수신 (model={model}, problem={problem_id})")
             return [{"item": c.item, "max_score": c.score, "score": 0, "reason": "모델 빈 응답 오류"} for c in criteria], "모델이 응답을 생성하지 못했습니다", 0
 
         # JSON 파싱 (마크다운 코드블록 제거)
         content = content.strip()
+        print(f"[DEBUG] 응답 시작 | first 100 chars: {content[:100]!r}")
+
         if content.startswith("```"):
             lines = content.split("\n")
             if lines[-1].strip() == "```":
@@ -392,10 +396,12 @@ async def grade_with_ai(
 
         start = content.find("{")
         end = content.rfind("}") + 1
+        print(f"[DEBUG] JSON 추출 | 시작위치={start}, 종료위치={end}, 포함됨={'{'in content}")
+
         if start != -1 and end > start:
             content = content[start:end]
         else:
-            print(f"[PARSE ERROR] JSON 없음 | model={model} | problem={problem_id} | content={content[:300]!r}")
+            print(f"[PARSE ERROR] JSON 없음 | model={model} | problem={problem_id} | content={content[:500]!r}")
 
         # JSON 파싱 (json5는 줄바꿈, 특수문자 등 허용)
         try:
