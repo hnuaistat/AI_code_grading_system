@@ -181,18 +181,6 @@ function ProblemCard({ problem, sessionId, studentFilename, canEdit, onUpdated }
           문제 {problem.problem_id}
           {problem.is_revised && <span style={fb.revisedBadge}>✏️ 수정됨</span>}
           {problem.has_ai_error && <span style={fb.aiErrorBadge}>⚠️ AI 채점 오류</span>}
-          {showPartial && (
-            <span style={{
-              marginLeft: 8,
-              padding: '2px 8px',
-              borderRadius: 4,
-              fontSize: 11,
-              fontWeight: 600,
-              background: '#dbeafe',
-              color: '#1e40af',
-              border: '1px solid #bfdbfe'
-            }}>½ 부분점수</span>
-          )}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ ...fb.problemScore, color: statusColor }}>

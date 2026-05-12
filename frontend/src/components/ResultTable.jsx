@@ -107,41 +107,9 @@ export default function ResultTable({ results, onSelectStudent }) {
                     return (
                       <td key={pid} style={{ ...td, textAlign: 'center', backgroundColor: bgColor }}>
                         {p ? (
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                            <span style={{ color: p.obtained_score === p.full_score ? '#059669' : '#d97706', fontWeight: 600 }}>
-                              {p.obtained_score.toFixed(2)}
-                            </span>
-                            {p.has_ai_error && (
-                              <span style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: 20,
-                                height: 20,
-                                borderRadius: '50%',
-                                backgroundColor: 'rgba(255, 140, 0, 0.25)',
-                                border: '2px solid #ff8c00',
-                                fontSize: 12,
-                                fontWeight: 700,
-                                color: '#ff8c00'
-                              }}>!</span>
-                            )}
-                            {!p.has_ai_error && p.has_partial_score && (
-                              <span style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: 20,
-                                height: 20,
-                                borderRadius: '50%',
-                                backgroundColor: 'rgba(59, 130, 246, 0.2)',
-                                border: '2px solid #3b82f6',
-                                fontSize: 11,
-                                fontWeight: 700,
-                                color: '#3b82f6'
-                              }} title="부분점수 항목 포함">½</span>
-                            )}
-                          </div>
+                          <span style={{ color: p.obtained_score === p.full_score ? '#059669' : '#d97706', fontWeight: 600 }}>
+                            {p.obtained_score.toFixed(2)}
+                          </span>
                         ) : <span style={{ color: '#e2e8f0' }}>-</span>}
                       </td>
                     );
