@@ -696,6 +696,7 @@ async def get_session(
                     "professor_feedback": p.professor_feedback,
                     "is_revised": p.is_revised,
                     "revised_at": p.revised_at,
+                    "has_ai_error": p.has_ai_error,
                 } for p in r.problems],
             })
         return {
