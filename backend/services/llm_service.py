@@ -249,7 +249,7 @@ async def grade_with_ai(
                 "score": 0,
                 "reason": "제출된 코드가 없습니다."
             }]
-        return results, "코드가 제출되지 않았습니다.", 0
+        return results, "코드가 제출되지 않았습니다.", 0, False
 
     # criteria가 비어있으면 full_score 기반으로 자율 평가 항목 생성
     if not criteria:
@@ -434,7 +434,7 @@ async def grade_with_ai(
                     "reason": "채점 항목 누락"
                 })
 
-        return graded, overall_feedback, tokens_used
+        return graded, overall_feedback, tokens_used, False
 
     except json.JSONDecodeError as e:
         print(f"\n[PARSE ERROR] JSONDecodeError | model={model} | problem={problem_id} | error={e}")
@@ -444,10 +444,10 @@ async def grade_with_ai(
                 "item": c.item,
                 "max_score": c.score,
                 "score": 0,
-                "reason": f"AI 응답 파싱 오류: {str(e)}"
+                "reason": f"AI 채점 오류: {str(e)}"
             }
             for c in criteria
-        ], f"AI 평가 중 응답 형식 오류: {str(e)}", 0
+        ], f"AI 채점 중 오류 발생: {str(e)}", 0, True
 
     except APIQuotaError:
         raise
@@ -462,4 +462,4 @@ async def grade_with_ai(
                 "reason": f"AI 채점 오류: {str(e)}"
             }
             for c in criteria
-        ], f"AI 채점 중 오류 발생: {str(e)}", 0
+        ], f"AI 채점 중 오류 발생: {str(e)}", 0, True

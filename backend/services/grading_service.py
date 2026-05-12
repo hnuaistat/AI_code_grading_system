@@ -317,7 +317,7 @@ async def grade_student_notebook(
         if no_code_reason is None:
             await asyncio.sleep(1)
             try:
-                ai_results, ai_overall, problem_tokens = await grade_with_ai(
+                ai_results, ai_overall, problem_tokens, ai_error_flag = await grade_with_ai(
                     student_code=stu_code,
                     answer_code=ans_code,
                     criteria=working_criteria,
@@ -329,6 +329,8 @@ async def grade_student_notebook(
                     remaining_score=0,  # 이미 working_criteria에 추가했으므로 중복 방지
                     model=model,
                 )
+                if ai_error_flag:
+                    has_ai_error = True
                 total_tokens += problem_tokens
                 for r in ai_results:
                     ai_partial_scores.append(PartialScoreResult(
