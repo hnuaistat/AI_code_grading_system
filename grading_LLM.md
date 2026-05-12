@@ -23,7 +23,7 @@
 | 라벨 | 이유 |
 |------|------|
 | `deepseek-v4(추론)` / `deepseek-v4-pro` | 추론 모델 → 채점에 불필요 |
-| `kimi-k2-instruct`, `kimi-k2.6` | JSON 지시 미준수, parse error 발생 |
+| `kimi-k2-instruct`, `kimi-k2.6` | JSON 지시 미준수, parse error 발생, no longer serverd |
 | `qwen3.5-35b-a3b`, `qwen3.6-plus` | API Timeout, 응답 속도 너무 느림 |
 
 ---
