@@ -168,11 +168,12 @@ function ProblemCard({ problem, sessionId, studentFilename, canEdit, onUpdated }
   };
 
   return (
-    <div style={{ ...fb.problem, borderColor: statusBorder, borderLeftWidth: 4, borderLeftColor: statusColor }}>
-      <div style={{ ...fb.problemHeader, background: statusBg, borderBottomColor: statusBorder }}>
+    <div style={{ ...fb.problem, borderColor: problem.has_ai_error ? '#fde68a' : statusBorder, borderLeftWidth: 4, borderLeftColor: problem.has_ai_error ? '#f59e0b' : statusColor }}>
+      <div style={{ ...fb.problemHeader, background: problem.has_ai_error ? '#fef3c7' : statusBg, borderBottomColor: problem.has_ai_error ? '#fde68a' : statusBorder }}>
         <span style={fb.problemTitle}>
           문제 {problem.problem_id}
           {problem.is_revised && <span style={fb.revisedBadge}>✏️ 수정됨</span>}
+          {problem.has_ai_error && <span style={fb.aiErrorBadge}>⚠️ AI 채점 오류</span>}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ ...fb.problemScore, color: statusColor }}>
@@ -636,6 +637,11 @@ const fb = {
   revisedBadge: {
     fontSize: 11, background: '#fef3c7', color: '#a16207',
     borderRadius: 4, padding: '2px 6px', marginLeft: 8, fontWeight: 600,
+  },
+  aiErrorBadge: {
+    fontSize: 11, background: 'rgba(255, 140, 0, 0.18)', color: '#b45309',
+    borderRadius: 4, padding: '2px 6px', marginLeft: 8, fontWeight: 600,
+    border: '1px solid rgba(255, 140, 0, 0.45)',
   },
   scoreInput: {
     width: 60, padding: '4px 6px', border: '1.5px solid #cbd5e1',

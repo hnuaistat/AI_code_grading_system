@@ -266,7 +266,7 @@ async def grade_with_ai(
     # 실행 결과 (있으면 포함)
     execution_context = ""
     if execution_output:
-        execution_context = f"\n\n## ⚠️ 코드 실행 시 발생한 에러\n```\n{execution_output}\n```\n위 에러가 실행 중 실제로 발생했습니다. 전체 공통 채점 가이드라인의 에러 관련 규칙을 반드시 적용하세요."
+        execution_context = f"\n\n## ⚠️ 코드 실행 에러 정보 (참고만 — 채점에 직접 반영 금지)\n```\n{execution_output}\n```\n⚠️ **절대 금지**: '런타임 에러로 평가 불가', '실행 오류로 인해 정상 평가 불가' 같은 이유로 항목을 0점 처리하지 마세요. 각 rubric 항목의 reason은 반드시 **해당 항목의 코드 로직**에 대한 구체적인 평가 설명이어야 합니다."
 
     # 전체 공통 가이드라인 (있으면 포함)
     global_guideline_text = ""
@@ -282,11 +282,15 @@ async def grade_with_ai(
    - **부분점수 항목들** (0점 또는 해당 점수만 - 체크리스트 방식):
      - 항목을 완전히 충족 → 해당 항목의 만점
      - 항목을 충족하지 않음 → 0점 (부분점 없음)
+     - ⚠️ **중요**: 각 항목은 **그 항목의 기능/로직만으로** 독립 평가. 다른 부분의 에러가 이 항목 점수를 결정하면 안 됨
+     - ⚠️ **reason 필수 규칙**: reason은 반드시 해당 코드 로직에 대한 구체적 설명. '런타임 에러로 평가 불가' 절대 금지.
+       - 맞은 경우 예: "cv2.add(img_gray, 80)으로 올바르게 밝기 조정 구현"
+       - 틀린 경우 예: "np.bitwise_not(a, b)는 인자 1개만 받는 함수인데 2개 전달", "cv2.cvtColor를 그레이스케일 이미지에 적용해 오류 발생"
    - **추가 배점** (AI 자율 판단 - 위 항목들 외의 배점):
      - 위 항목들 점수 합계 < full_score인 경우, 그 차이를 전체 코드 품질로 자율적으로 부여
      - 코드 구현의 완성도, 효율성, 가독성 등을 종합 평가하여 추가 점수 부여
      - 코드가 에러나면 → 추가 배점 0점"""
-    consistency_instruction = "feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_score와 같아야 합니다."
+    consistency_instruction = "feedback에서 잘했다고 했으면 rubric_scores의 score는 반드시 max_score와 같아야 합니다. 실행 오류 정보는 feedback에 포함되지만, 각 rubric_scores 항목을 0점으로 처리하는 근거가 되면 안 됩니다."
 
     system_prompt = f"""⚠️ **필수 규칙 (어기면 안 됨)**:
 1. 반드시 완전하고 유효한 JSON만 출력 (마크다운 X, 설명 X, 다른 텍스트 X)
@@ -302,6 +306,13 @@ async def grade_with_ai(
 {scoring_instruction}
 
 3. **해설과 점수의 일관성**: {consistency_instruction}
+
+4. **에러와 채점의 독립성** (⚠️ 매우 중요):
+   - 일부 코드에 실행 오류가 있어도, 각 루브릭 항목은 **해당 항목의 코드 로직만으로** 독립적으로 평가
+   - reason에 '런타임 에러 발생으로 평가 불가', '실행되지 않아 평가 불가' 등 절대 금지
+   - reason은 항상 해당 항목의 코드가 맞는지/틀리는지 그 이유를 구체적으로 서술
+   - 잘 구현된 항목이 있으면 만점 부여, 잘못된 항목이면 무엇이 왜 틀렸는지 설명
+   - 실행 오류 전반에 대한 종합 언급은 feedback에만 포함
 
 ## 평가 절차
 1. Analysis: 학생 코드 분석

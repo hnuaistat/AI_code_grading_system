@@ -1216,7 +1216,8 @@ async def download_excel(
         cell.border = thin_border
 
     rank_map1 = build_rank_map(original_results)
-    for row_idx, (orig_idx, student) in enumerate(list(enumerate(original_results)), 2):
+    sorted_pairs1 = sorted(enumerate(original_results), key=lambda x: rank_map1[x[0]])
+    for row_idx, (orig_idx, student) in enumerate(sorted_pairs1, 2):
         ws1.cell(row=row_idx, column=1, value=student.student_id)
         ws1.cell(row=row_idx, column=2, value=student.student_name or "")
         col = 3
@@ -1234,7 +1235,7 @@ async def download_excel(
 
     # ── Sheet 2: AI 분석결과 (세부 채점항목) ─────────────────────────────
     ws2 = wb.create_sheet("AI분석결과")
-    detail_headers = ["학번", "이름", "문제", "채점항목", "최대점수", "획득점수", "AI피드백"]
+    detail_headers = ["학번", "이름", "문제", "채점항목", "최대점수", "획득점수", "AI피드백", "AI종합피드백"]
     for col, h in enumerate(detail_headers, 1):
         cell = ws2.cell(row=1, column=col, value=h)
         cell.font = header_font
@@ -1245,7 +1246,7 @@ async def download_excel(
     row = 2
     for student in original_results:
         for problem in student.problems:
-            for ps in problem.partial_scores:
+            for ps_idx, ps in enumerate(problem.partial_scores):
                 ws2.cell(row=row, column=1, value=student.student_id).alignment = center_align
                 ws2.cell(row=row, column=2, value=student.student_name or "").alignment = center_align
                 ws2.cell(row=row, column=3, value=f"Q{problem.problem_id}").alignment = center_align
@@ -1253,11 +1254,13 @@ async def download_excel(
                 ws2.cell(row=row, column=5, value=ps.max_score).alignment = center_align
                 ws2.cell(row=row, column=6, value=ps.score).alignment = center_align
                 ws2.cell(row=row, column=7, value=ps.reason).alignment = wrap_align
-                for c in range(1, 8):
+                if ps_idx == 0:
+                    ws2.cell(row=row, column=8, value=problem.ai_feedback or "").alignment = wrap_align
+                for c in range(1, 9):
                     ws2.cell(row=row, column=c).border = thin_border
                 row += 1
 
-    for col in range(1, 8):
+    for col in range(1, 9):
         max_len = max(
             (len(str(ws2.cell(r2, col).value or "")) for r2 in range(1, row)),
             default=0
