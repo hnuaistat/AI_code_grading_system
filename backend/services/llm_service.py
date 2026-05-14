@@ -8,12 +8,27 @@ import httpx
 from openai import AsyncOpenAI
 import openai
 import json5
+from pydantic import BaseModel
 from schemas import PartialScoreCriterion
 
 
 class APIQuotaError(Exception):
     """OpenAI API 사용량 초과 시 발생하는 예외"""
     pass
+
+
+class GradingRubricScore(BaseModel):
+    item: str
+    score: float
+    max_score: float
+    reason: str
+
+
+class GradingResponse(BaseModel):
+    analysis: str
+    rubric_scores: List[GradingRubricScore]
+    feedback: str
+    total_score: float
 
 
 DEFAULT_MODEL = "openai/gpt-4o-mini"
@@ -343,21 +358,23 @@ async def grade_with_ai(
 - "A는 했지만 B는 안 함" / "A는 있지만 B가 부족"
 - "일부만 충족" / "요구사항 중 일부 누락"
 
-### 3. **루브릭 요구사항 중심 평가**
-- 항목명의 요구사항만 평가, 명시되지 않은 것으로 감점 금지
-- 예: "1행 3열 출력" 요구사항에서 `plt.show()` 누락 금지
+### 3. **루브릭 외 감점 금지 (CRITICAL)**
+- 루브릭 항목명에 명시된 요구사항만 평가. 코드 실행 여부·변수명·`plt.show()` 등 명시되지 않은 것으로 절대 감점 금지.
 
 ### 4. **해설과 점수의 일관성**
 {consistency_instruction}
 
-### 5. **에러와 채점의 독립성**
-- **이 항목 자체의 로직 오류** → 0점
-- **다른 항목의 오류** → 영향 주면 안 됨
-- **런타임 에러** → feedback 개선점에만 작성
+### 5. **각 항목 독립 채점 (절대 원칙)**
+- ⚠️ 각 루브릭 항목을 완전히 독립적으로 평가. 다른 항목의 오류/실패가 이 항목에 영향 X.
+- 예: cv2.add() 항목은 NumPy 항목 실패와 무관 / subplot은 앞 셀 에러와 무관 / 설명 항목은 실행 여부 무관.
+- 금지 표현: "전체 문항 0점", "앞선 오류로", "실행 오류로 인해".
+
+### 6. **에러는 feedback에만**
+- 실행 오류는 feedback 개선점에만 작성. 개별 reason에 "오류/에러/실행/앞선" 단어 금지.
 
 ---
 
-## 평가 절차: Analysis → Rubric Evaluation → Feedback"""
+## 평가 절차: Analysis → Rubric Evaluation (각 항목 독립!) → Feedback"""
 
     # 문제별 평가 가이드라인
     guideline_text = ""
@@ -383,15 +400,16 @@ async def grade_with_ai(
 모범 답안의 구현 방식과 다르더라도, 문제를 올바르게 해결했고 기준들을 충족한다면 정답으로 인정하세요.
 
 🚫 **최종 체크리스트**:
-- ✅ reason: 50-100자 이내 (한두 문장)
-- ✅ feedback: 125-150자 이내 (개선점만, 2-3개)
-- ✅ JSON만 반환 (첫 글자 `{{`, 마지막 글자 `}}`)"""
+- ✅ 각 항목 독립 평가 (다른 항목 오류/루브릭 외로 감점 X)
+- ✅ reason: 50-100자, "오류/실행/앞선" 단어 금지
+- ✅ feedback: 125-150자 (개선점만, 2-3개)
+- ✅ JSON만 반환 (`{{`로 시작, `}}`로 끝)"""
 
     provider, actual_model_name = parse_model_id(model or DEFAULT_MODEL)
     client, model_name = get_llm_client(model or DEFAULT_MODEL)
 
     try:
-        # OpenAI와 Fireworks 모두 response_format 지원
+        # OpenAI: json_object 모드, Fireworks: json_schema 모드 (스키마 강제)
         api_params = {
             "model": model_name,
             "max_tokens": 4096,
@@ -401,8 +419,16 @@ async def grade_with_ai(
                 {"role": "user", "content": user_prompt}
             ]
         }
-        if provider in ["openai", "fireworks"]:
+        if provider == "openai":
             api_params["response_format"] = {"type": "json_object"}
+        elif provider == "fireworks":
+            api_params["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "GradingResponse",
+                    "schema": GradingResponse.model_json_schema()
+                }
+            }
 
         response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
 
