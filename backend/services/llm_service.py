@@ -391,7 +391,7 @@ async def grade_with_ai(
     client, model_name = get_llm_client(model or DEFAULT_MODEL)
 
     try:
-        # OpenAI는 response_format 지원, Fireworks는 미지원
+        # OpenAI와 Fireworks 모두 response_format 지원
         api_params = {
             "model": model_name,
             "max_tokens": 4096,
@@ -401,7 +401,7 @@ async def grade_with_ai(
                 {"role": "user", "content": user_prompt}
             ]
         }
-        if provider == "openai":
+        if provider in ["openai", "fireworks"]:
             api_params["response_format"] = {"type": "json_object"}
 
         response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
