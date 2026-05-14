@@ -298,7 +298,7 @@ async def grade_with_ai(
     {{"item": "조건 처리", "score": 5, "max_score": 5, "reason": "if-elif-else로 모든 경우를 올바르게 처리 (50-100자)"}},
     {{"item": "출력 형식", "score": 2.5, "max_score": 5, "reason": "지정된 형식으로 출력했으나 소수점 자리수가 부족 (50-100자)"}}
   ],
-  "feedback": "잘한 점(2-3개):\\n- 조건문 로직 명확\\n- 변수명 이해하기 쉬움\\n\\n개선점(2-3개):\\n- 출력 포맷 조정\\n- 엣지 케이스 처리 추가\\n(총 250-300자 이내)",
+  "feedback": "개선점:\\n- 출력 포맷 조정\\n- 엣지 케이스 처리 추가\\n(125-150자 이내)",
   "total_score": 7.5
 }}
 
@@ -308,7 +308,7 @@ async def grade_with_ai(
 - JSON만 출력 (마크다운 X, 설명 X, 자연어 X)
 - 개행은 \\n으로만 표현 (실제 개행 금지)
 - **reason**: 한글로 한두 문장, **50-100자 이내** (절대)
-- **feedback**: 250-300자 이내 (잘한 점 2-3개 + 개선점 2-3개)
+- **feedback**: 125-150자 이내 (개선점만, 2-3개)
 
 ---
 
@@ -384,21 +384,27 @@ async def grade_with_ai(
 
 🚫 **최종 체크리스트**:
 - ✅ reason: 50-100자 이내 (한두 문장)
-- ✅ feedback: 250-300자 이내 (잘한 점 2-3개 + 개선점 2-3개)
+- ✅ feedback: 125-150자 이내 (개선점만, 2-3개)
 - ✅ JSON만 반환 (첫 글자 `{{`, 마지막 글자 `}}`)"""
 
+    provider, actual_model_name = parse_model_id(model or DEFAULT_MODEL)
     client, model_name = get_llm_client(model or DEFAULT_MODEL)
 
     try:
-        response = await _call_with_retry(lambda: client.chat.completions.create(
-            model=model_name,
-            max_tokens=4096,
-            temperature=0.5,
-            messages=[
+        # OpenAI는 response_format 지원, Fireworks는 미지원
+        api_params = {
+            "model": model_name,
+            "max_tokens": 4096,
+            "temperature": 0.3,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ]
-        ))
+        }
+        if provider == "openai":
+            api_params["response_format"] = {"type": "json_object"}
+
+        response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
 
         content = response.choices[0].message.content
         tokens_used = response.usage.total_tokens if response.usage else 0
