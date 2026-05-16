@@ -46,6 +46,15 @@ class SubjectItemCreate(BaseModel):
     name: str
 
 
+class SubjectUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+
+
+class SubjectItemUpdate(BaseModel):
+    name: str
+
+
 class HistorySessionItem(BaseModel):
     session_id: str
     subject_id: Optional[int] = None

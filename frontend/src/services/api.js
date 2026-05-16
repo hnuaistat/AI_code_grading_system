@@ -29,7 +29,9 @@ export const subjectAPI = {
   list: () => API.get('/subjects'),
   create: (name, code) => API.post('/subjects', { name, code }),
   getDetail: (subjectId) => API.get(`/subjects/${subjectId}`),
+  update: (subjectId, name, code) => API.put(`/subjects/${subjectId}`, { name, code }),
   createItem: (subjectId, name) => API.post(`/subjects/${subjectId}/items`, { name }),
+  updateItem: (subjectId, itemId, name) => API.put(`/subjects/${subjectId}/items/${itemId}`, { name }),
   deleteItem: (subjectId, itemId) => API.delete(`/subjects/${subjectId}/items/${itemId}`),
 };
 

@@ -96,6 +96,18 @@ export default function DashboardPage() {
     }
   };
 
+  const formatDuration = (createdAt, completedAt) => {
+    if (!createdAt || !completedAt) return null;
+    const diffMs = new Date(completedAt) - new Date(createdAt);
+    if (diffMs <= 0) return null;
+    const totalSec = Math.floor(diffMs / 1000);
+    const min = Math.floor(totalSec / 60);
+    const sec = totalSec % 60;
+    if (min === 0) return `${sec}초`;
+    if (sec === 0) return `${min}분`;
+    return `${min}분 ${sec}초`;
+  };
+
   if (!session) return (
     <div style={{ display:'flex', justifyContent:'center', alignItems:'center', height:'100vh', color:'#64748b' }}>
       {error || '로딩 중...'}
@@ -126,6 +138,48 @@ export default function DashboardPage() {
       </header>
 
       <main style={s.main}>
+        {/* 채점 세션 정보 배너 */}
+        <div style={s.infoBanner}>
+          <div style={s.infoItem}>
+            <span style={s.infoLabel}>📘 과목</span>
+            <span style={s.infoValue}>
+              {session.subject_name || '—'}
+              {session.subject_code && <span style={s.infoCode}>{session.subject_code}</span>}
+            </span>
+          </div>
+          <div style={s.infoDivider} />
+          <div style={s.infoItem}>
+            <span style={s.infoLabel}>📋 세부 항목</span>
+            <span style={s.infoValue}>{session.subject_item_name || '—'}</span>
+          </div>
+          <div style={s.infoDivider} />
+          <div style={s.infoItem}>
+            <span style={s.infoLabel}>👥 학생 수</span>
+            <span style={s.infoValue}>{session.total_students}명</span>
+          </div>
+          <div style={s.infoDivider} />
+          <div style={s.infoItem}>
+            <span style={s.infoLabel}>⏱ 소요 시간</span>
+            <span style={s.infoValue}>
+              {formatDuration(session.created_at, session.completed_at) || (isRunning ? '채점 중...' : '—')}
+            </span>
+          </div>
+          <div style={s.infoDivider} />
+          <div style={s.infoItem}>
+            <span style={s.infoLabel}>🤖 채점 AI</span>
+            <span style={{
+              ...s.infoValue,
+              background: session.grading_model?.startsWith('fireworks') ? '#fef3c7' : '#dbeafe',
+              color: session.grading_model?.startsWith('fireworks') ? '#b45309' : '#1d4ed8',
+              borderRadius: 6, padding: '2px 10px', fontSize: 12, fontWeight: 700, fontFamily: 'monospace',
+            }}>
+              {session.grading_model
+                ? session.grading_model.split('/').pop()
+                : '—'}
+            </span>
+          </div>
+        </div>
+
         {/* Progress / Status */}
         {isRunning && (
           <div style={s.progressCard}>
@@ -331,6 +385,16 @@ const s = {
   userName: { fontSize:14, color:'#64748b' },
   logoutBtn: { background:'none', border:'1px solid #e2e8f0', borderRadius:6, padding:'6px 14px', cursor:'pointer', fontSize:14, color:'#64748b' },
   main: { maxWidth:1100, margin:'0 auto', padding:'32px 24px' },
+  infoBanner: {
+    background: '#fff', borderRadius: 12, padding: '16px 24px',
+    marginBottom: 20, boxShadow: '0 1px 6px rgba(0,0,0,0.06)',
+    display: 'flex', alignItems: 'center', gap: 0, flexWrap: 'wrap',
+  },
+  infoItem: { display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 20px' },
+  infoLabel: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 },
+  infoValue: { fontSize: 14, fontWeight: 600, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 6 },
+  infoCode: { fontSize: 11, background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700 },
+  infoDivider: { width: 1, height: 36, background: '#e2e8f0', margin: '0 4px' },
   progressCard: { background:'#fff', borderRadius:12, padding:'20px 24px', marginBottom:24, boxShadow:'0 1px 6px rgba(0,0,0,0.06)' },
   progressTop: { display:'flex', justifyContent:'space-between', marginBottom:10 },
   progressLabel: { fontSize:14, color:'#374151', fontWeight:500 },

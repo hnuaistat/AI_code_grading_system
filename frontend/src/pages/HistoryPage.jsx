@@ -10,6 +10,18 @@ function formatDate(iso) {
     hour: '2-digit', minute: '2-digit' });
 }
 
+function formatDuration(createdAt, completedAt) {
+  if (!createdAt || !completedAt) return '-';
+  const diffMs = new Date(completedAt) - new Date(createdAt);
+  if (diffMs <= 0) return '-';
+  const totalSec = Math.floor(diffMs / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min === 0) return `${sec}초`;
+  if (sec === 0) return `${min}분`;
+  return `${min}분 ${sec}초`;
+}
+
 function StatusBadge({ status }) {
   const cfg = {
     completed: { bg: '#dcfce7', color: '#16a34a', label: '완료' },
@@ -26,8 +38,6 @@ function StatusBadge({ status }) {
 }
 
 function ModelBadge({ model, label }) {
-  // model: full ID (e.g. "openai/gpt-4o-mini" 또는 "fireworks/accounts/fireworks/models/...")
-  // label: 짧은 표시 라벨 (백엔드에서 제공)
   const provider = (model || '').split('/')[0];
   const displayName = label || (model || '').split('/').pop() || '-';
   const cfg = provider === 'fireworks'
@@ -56,10 +66,21 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterSubject, setFilterSubject] = useState('all');
+
+  // 단일 삭제 모달
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+
+  // 다중 선택 삭제
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkDeleteMode, setBulkDeleteMode] = useState(false);
+  const [showBulkModal, setShowBulkModal] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteProgress, setBulkDeleteProgress] = useState(0);
+  const [bulkDeleteError, setBulkDeleteError] = useState('');
+  const [bulkConfirmText, setBulkConfirmText] = useState('');
 
   const reloadHistory = () => {
     setLoading(true);
@@ -73,6 +94,7 @@ export default function HistoryPage() {
     reloadHistory();
   }, []);
 
+  // 단일 삭제
   const openDeleteModal = (session) => {
     setDeleteTarget(session);
     setDeleteConfirmText('');
@@ -86,7 +108,6 @@ export default function HistoryPage() {
     setDeleteError('');
   };
 
-  // 사용자가 따라 써야 할 확인 문구: "과목명 / 세부항목" 형식
   const expectedConfirmText = deleteTarget
     ? `${deleteTarget.subject_name || '과목 미지정'} / ${deleteTarget.subject_item_name || '항목 미지정'}`
     : '';
@@ -111,6 +132,56 @@ export default function HistoryPage() {
     }
   };
 
+  // 다중 선택 삭제
+  const toggleSelect = (sessionId) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = (sessions) => {
+    const deletable = sessions.filter(s => s.status !== 'running').map(s => s.session_id);
+    const allSelected = deletable.every(id => selectedIds.has(id));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (allSelected) deletable.forEach(id => next.delete(id));
+      else deletable.forEach(id => next.add(id));
+      return next;
+    });
+  };
+
+  const exitBulkMode = () => {
+    setBulkDeleteMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const confirmBulkDelete = async () => {
+    const ids = [...selectedIds];
+    setBulkDeleting(true);
+    setBulkDeleteProgress(0);
+    setBulkDeleteError('');
+    let done = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await gradingAPI.deleteSession(id);
+      } catch {
+        failed++;
+      }
+      done++;
+      setBulkDeleteProgress(Math.round((done / ids.length) * 100));
+    }
+    setBulkDeleting(false);
+    setShowBulkModal(false);
+    setSelectedIds(new Set());
+    setBulkDeleteMode(false);
+    if (failed > 0) setBulkDeleteError(`${failed}개 삭제 실패`);
+    reloadHistory();
+  };
+
   const subjects = [...new Set(history.map(h => h.subject_name).filter(Boolean))];
 
   const filtered = history.filter(h => {
@@ -122,13 +193,14 @@ export default function HistoryPage() {
     return matchSubject && matchSearch;
   });
 
-  // Group by subject
   const grouped = filtered.reduce((acc, h) => {
     const key = h.subject_name || '과목 미지정';
     if (!acc[key]) acc[key] = [];
     acc[key].push(h);
     return acc;
   }, {});
+
+  const selectedCount = selectedIds.size;
 
   return (
     <div style={s.page}>
@@ -163,7 +235,27 @@ export default function HistoryPage() {
               <option key={sub} value={sub}>{sub}</option>
             ))}
           </select>
+          {!bulkDeleteMode ? (
+            <button style={s.bulkModeBtn} onClick={() => setBulkDeleteMode(true)}>
+              ☑️ 선택 삭제
+            </button>
+          ) : (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                style={selectedCount > 0 ? s.bulkDeleteBtn : s.bulkDeleteBtnDisabled}
+                disabled={selectedCount === 0}
+                onClick={() => { setBulkDeleteError(''); setBulkConfirmText(''); setShowBulkModal(true); }}
+              >
+                🗑 {selectedCount}개 삭제
+              </button>
+              <button style={s.bulkCancelBtn} onClick={exitBulkMode}>취소</button>
+            </div>
+          )}
         </div>
+
+        {bulkDeleteError && (
+          <div style={s.bulkError}>{bulkDeleteError}</div>
+        )}
 
         {loading ? (
           <div style={s.empty}>로딩 중...</div>
@@ -174,84 +266,133 @@ export default function HistoryPage() {
             <button style={s.primaryBtn} onClick={() => navigate('/upload')}>첫 채점 시작하기</button>
           </div>
         ) : (
-          Object.entries(grouped).map(([subjectName, sessions]) => (
-            <div key={subjectName} style={s.subjectGroup}>
-              <div style={s.subjectHeader}>
-                <span style={s.subjectName}>{subjectName}</span>
-                <span style={s.sessionCount}>{sessions.length}회 채점</span>
-              </div>
+          Object.entries(grouped).map(([subjectName, sessions]) => {
+            const deletableSessions = sessions.filter(s => s.status !== 'running');
+            const allSelected = deletableSessions.length > 0 && deletableSessions.every(s => selectedIds.has(s.session_id));
+            const someSelected = deletableSessions.some(s => selectedIds.has(s.session_id));
 
-              <div style={s.tableCard}>
-                <table style={s.table}>
-                  <thead>
-                    <tr style={{ background: '#f8fafc' }}>
-                      <th style={{ ...th, width: '140px' }}>날짜</th>
-                      <th style={{ ...th, width: '90px' }}>상태</th>
-                      <th style={{ ...th, width: '120px' }}>세부 항목</th>
-                      <th style={{ ...th, textAlign: 'center', width: '70px' }}>학생 수</th>
-                      <th style={{ ...th, width: '140px' }}>완료 시간</th>
-                      <th style={{ ...th, textAlign: 'center', width: '110px' }}>채점 AI</th>
-                      <th style={{ ...th, textAlign: 'center', width: '80px' }}>결과 보기</th>
-                      <th style={{ ...th, textAlign: 'center', width: '70px' }}>삭제</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sessions.map(session => (
-                      <tr key={session.session_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={td}>{formatDate(session.created_at)}</td>
-                        <td style={td}><StatusBadge status={session.status} /></td>
-                        <td style={td}>
-                          {session.subject_item_name ? (
-                            <span style={{ background: '#f0fdf4', color: '#16a34a', borderRadius: 4, padding: '2px 8px', fontSize: 12, fontWeight: 500 }}>
-                              {session.subject_item_name}
-                            </span>
-                          ) : (
-                            <span style={{ color: '#94a3b8', fontSize: 13 }}>—</span>
-                          )}
-                        </td>
-                        <td style={{ ...td, textAlign: 'center' }}>
-                          <span style={{ fontWeight: 600 }}>{session.total_students}</span>명
-                        </td>
-                        <td style={{ ...td, color: '#64748b', fontSize: 13 }}>
-                          {session.completed_at ? formatDate(session.completed_at) : '-'}
-                        </td>
-                        <td style={{ ...td, textAlign: 'center' }}>
-                          {session.grading_model ? (
-                            <ModelBadge model={session.grading_model} label={session.grading_model_label} />
-                          ) : (
-                            <span style={{ color: '#cbd5e1', fontSize: 12 }}>—</span>
-                          )}
-                        </td>
-                        <td style={{ ...td, textAlign: 'center' }}>
-                          <button
-                            style={session.status === 'completed' ? s.viewBtn : s.viewBtnDisabled}
-                            onClick={() => session.status === 'completed' && navigate(`/dashboard/${session.session_id}`)}
-                            disabled={session.status !== 'completed'}
-                          >
-                            {session.status === 'completed' ? '보기' : '—'}
-                          </button>
-                        </td>
-                        <td style={{ ...td, textAlign: 'center' }}>
-                          <button
-                            style={session.status === 'running' ? s.deleteBtnDisabled : s.deleteBtn}
-                            onClick={() => session.status !== 'running' && openDeleteModal(session)}
-                            disabled={session.status === 'running'}
-                            title={session.status === 'running' ? '진행 중인 채점은 삭제할 수 없습니다' : '채점 기록 삭제'}
-                          >
-                            삭제
-                          </button>
-                        </td>
+            return (
+              <div key={subjectName} style={s.subjectGroup}>
+                <div style={s.subjectHeader}>
+                  <span style={s.subjectName}>{subjectName}</span>
+                  <span style={s.sessionCount}>{sessions.length}회 채점</span>
+                  {bulkDeleteMode && deletableSessions.length > 0 && (
+                    <button style={s.selectAllBtn} onClick={() => toggleSelectAll(sessions)}>
+                      {allSelected ? '전체 해제' : '전체 선택'}
+                    </button>
+                  )}
+                </div>
+
+                <div style={s.tableCard}>
+                  <table style={s.table}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc' }}>
+                        {bulkDeleteMode && <th style={{ ...th, width: '44px', textAlign: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            ref={el => { if (el) el.indeterminate = someSelected && !allSelected; }}
+                            onChange={() => toggleSelectAll(sessions)}
+                            style={{ cursor: 'pointer', width: 15, height: 15 }}
+                          />
+                        </th>}
+                        <th style={{ ...th, width: '140px' }}>날짜</th>
+                        <th style={{ ...th, width: '90px' }}>상태</th>
+                        <th style={{ ...th, width: '120px' }}>세부 항목</th>
+                        <th style={{ ...th, textAlign: 'center', width: '70px' }}>학생 수</th>
+                        <th style={{ ...th, width: '140px' }}>완료 시간</th>
+                        <th style={{ ...th, textAlign: 'center', width: '110px' }}>채점 AI</th>
+                        <th style={{ ...th, textAlign: 'center', width: '80px' }}>결과 보기</th>
+                        {!bulkDeleteMode && <th style={{ ...th, textAlign: 'center', width: '70px' }}>삭제</th>}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {sessions.map(session => {
+                        const isChecked = selectedIds.has(session.session_id);
+                        const isDeletable = session.status !== 'running';
+                        return (
+                          <tr
+                            key={session.session_id}
+                            style={{
+                              borderBottom: '1px solid #f1f5f9',
+                              background: isChecked ? '#fef2f2' : 'transparent',
+                              cursor: bulkDeleteMode && isDeletable ? 'pointer' : 'default',
+                            }}
+                            onClick={() => { if (bulkDeleteMode && isDeletable) toggleSelect(session.session_id); }}
+                          >
+                            {bulkDeleteMode && (
+                              <td style={{ ...td, textAlign: 'center' }}>
+                                {isDeletable ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={() => toggleSelect(session.session_id)}
+                                    onClick={e => e.stopPropagation()}
+                                    style={{ cursor: 'pointer', width: 15, height: 15 }}
+                                  />
+                                ) : (
+                                  <span style={{ color: '#cbd5e1', fontSize: 12 }}>—</span>
+                                )}
+                              </td>
+                            )}
+                            <td style={td}>{formatDate(session.created_at)}</td>
+                            <td style={td}><StatusBadge status={session.status} /></td>
+                            <td style={td}>
+                              {session.subject_item_name ? (
+                                <span style={{ background: '#f0fdf4', color: '#16a34a', borderRadius: 4, padding: '2px 8px', fontSize: 12, fontWeight: 500 }}>
+                                  {session.subject_item_name}
+                                </span>
+                              ) : (
+                                <span style={{ color: '#94a3b8', fontSize: 13 }}>—</span>
+                              )}
+                            </td>
+                            <td style={{ ...td, textAlign: 'center' }}>
+                              <span style={{ fontWeight: 600 }}>{session.total_students}</span>명
+                            </td>
+                            <td style={{ ...td, color: '#64748b', fontSize: 13 }}>
+                              {session.completed_at ? formatDate(session.completed_at) : '-'}
+                            </td>
+                            <td style={{ ...td, textAlign: 'center' }}>
+                              {session.grading_model ? (
+                                <ModelBadge model={session.grading_model} label={session.grading_model_label} />
+                              ) : (
+                                <span style={{ color: '#cbd5e1', fontSize: 12 }}>—</span>
+                              )}
+                            </td>
+                            <td style={{ ...td, textAlign: 'center' }}>
+                              <button
+                                style={session.status === 'completed' ? s.viewBtn : s.viewBtnDisabled}
+                                onClick={e => { e.stopPropagation(); session.status === 'completed' && navigate(`/dashboard/${session.session_id}`); }}
+                                disabled={session.status !== 'completed'}
+                              >
+                                {session.status === 'completed' ? '보기' : '—'}
+                              </button>
+                            </td>
+                            {!bulkDeleteMode && (
+                              <td style={{ ...td, textAlign: 'center' }}>
+                                <button
+                                  style={session.status === 'running' ? s.deleteBtnDisabled : s.deleteBtn}
+                                  onClick={() => session.status !== 'running' && openDeleteModal(session)}
+                                  disabled={session.status === 'running'}
+                                  title={session.status === 'running' ? '진행 중인 채점은 삭제할 수 없습니다' : '채점 기록 삭제'}
+                                >
+                                  삭제
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </main>
 
-      {/* 삭제 확인 모달 */}
+      {/* 단일 삭제 확인 모달 */}
       {deleteTarget && (
         <div style={s.modalOverlay} onClick={closeDeleteModal}>
           <div style={s.modal} onClick={e => e.stopPropagation()}>
@@ -260,7 +401,6 @@ export default function HistoryPage() {
             <p style={s.modalDesc}>
               이 작업은 <strong>되돌릴 수 없습니다</strong>. 학생 채점 결과 및 수정 이력이 모두 삭제됩니다.
             </p>
-
             <div style={s.modalInfoBox}>
               <div style={s.modalInfoRow}>
                 <span style={s.modalInfoLabel}>과목</span>
@@ -275,11 +415,8 @@ export default function HistoryPage() {
                 <span style={s.modalInfoValue}>{deleteTarget.total_students}명</span>
               </div>
             </div>
-
             <div style={s.modalConfirmSection}>
-              <p style={s.modalConfirmLabel}>
-                삭제를 확인하려면 아래 문구를 정확히 입력하세요:
-              </p>
+              <p style={s.modalConfirmLabel}>삭제를 확인하려면 아래 문구를 정확히 입력하세요:</p>
               <div style={s.modalConfirmHint}>{expectedConfirmText}</div>
               <input
                 style={{
@@ -295,17 +432,10 @@ export default function HistoryPage() {
               />
               {deleteError && <div style={s.modalError}>{deleteError}</div>}
             </div>
-
             <div style={s.modalActions}>
-              <button style={s.modalCancelBtn} onClick={closeDeleteModal} disabled={deleting}>
-                취소
-              </button>
+              <button style={s.modalCancelBtn} onClick={closeDeleteModal} disabled={deleting}>취소</button>
               <button
-                style={
-                  deleteConfirmText.trim() === expectedConfirmText.trim() && !deleting
-                    ? s.modalDeleteBtn
-                    : s.modalDeleteBtnDisabled
-                }
+                style={deleteConfirmText.trim() === expectedConfirmText.trim() && !deleting ? s.modalDeleteBtn : s.modalDeleteBtnDisabled}
                 onClick={confirmDelete}
                 disabled={deleteConfirmText.trim() !== expectedConfirmText.trim() || deleting}
               >
@@ -315,6 +445,86 @@ export default function HistoryPage() {
           </div>
         </div>
       )}
+
+      {/* 다중 삭제 확인 모달 */}
+      {showBulkModal && (() => {
+        const selectedSessions = history.filter(h => selectedIds.has(h.session_id));
+        const bulkConfirmRequired = '삭제 확인';
+        const bulkConfirmOk = bulkConfirmText.trim() === bulkConfirmRequired;
+        return (
+          <div style={s.modalOverlay} onClick={() => { if (!bulkDeleting) { setShowBulkModal(false); } }}>
+            <div style={{ ...s.modal, maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+              <div style={s.modalIcon}>🗑️</div>
+              <h3 style={s.modalTitle}>{selectedCount}개 채점 기록을 삭제하시겠습니까?</h3>
+              <p style={s.modalDesc}>
+                이 작업은 <strong>되돌릴 수 없습니다</strong>.<br />
+                아래 선택한 채점 기록과 학생 결과가 모두 삭제됩니다.
+              </p>
+
+              {/* 선택된 항목 목록 */}
+              <div style={s.bulkListBox}>
+                {selectedSessions.map((sess, i) => (
+                  <div key={sess.session_id} style={s.bulkListItem}>
+                    <span style={s.bulkListNum}>{i + 1}</span>
+                    <div style={s.bulkListInfo}>
+                      <span style={s.bulkListSubject}>
+                        {sess.subject_name || '과목 미지정'}
+                        {sess.subject_item_name && (
+                          <span style={s.bulkListItem2}> / {sess.subject_item_name}</span>
+                        )}
+                      </span>
+                      <span style={s.bulkListMeta}>
+                        {formatDate(sess.created_at)} · {sess.total_students}명
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {bulkDeleting ? (
+                <div style={{ marginBottom: 24 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <span style={{ fontSize: 13, color: '#64748b' }}>삭제 중...</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#dc2626' }}>{bulkDeleteProgress}%</span>
+                  </div>
+                  <div style={{ height: 8, background: '#fee2e2', borderRadius: 99, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', background: '#dc2626', borderRadius: 99, width: `${bulkDeleteProgress}%`, transition: 'width 0.3s' }} />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div style={s.modalConfirmSection}>
+                    <p style={s.modalConfirmLabel}>삭제를 확인하려면 아래 문구를 정확히 입력하세요:</p>
+                    <div style={s.modalConfirmHint}>{bulkConfirmRequired}</div>
+                    <input
+                      style={{
+                        ...s.modalInput,
+                        borderColor: bulkConfirmOk ? '#16a34a' : '#e2e8f0',
+                      }}
+                      type="text"
+                      value={bulkConfirmText}
+                      onChange={e => setBulkConfirmText(e.target.value)}
+                      placeholder="위 문구를 그대로 입력"
+                      autoFocus
+                    />
+                    {bulkDeleteError && <div style={s.modalError}>{bulkDeleteError}</div>}
+                  </div>
+                  <div style={s.modalActions}>
+                    <button style={s.modalCancelBtn} onClick={() => setShowBulkModal(false)}>취소</button>
+                    <button
+                      style={bulkConfirmOk ? s.modalDeleteBtn : s.modalDeleteBtnDisabled}
+                      onClick={confirmBulkDelete}
+                      disabled={!bulkConfirmOk}
+                    >
+                      {selectedCount}개 모두 삭제
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -340,13 +550,56 @@ const s = {
     padding: '6px 14px', cursor: 'pointer', fontSize: 14, color: '#92400e', fontWeight: 500,
   },
   main: { maxWidth: 1000, margin: '0 auto', padding: '32px 24px' },
-  filterBar: { display: 'flex', gap: 12, marginBottom: 28 },
+  filterBar: { display: 'flex', gap: 12, marginBottom: 28, alignItems: 'center' },
   search: { flex: 1, padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none' },
   select: { padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none', background: '#fff', cursor: 'pointer' },
+  bulkModeBtn: {
+    background: '#fff', border: '1.5px solid #e2e8f0', borderRadius: 8,
+    padding: '10px 16px', fontSize: 14, cursor: 'pointer', color: '#374151',
+    fontWeight: 500, whiteSpace: 'nowrap',
+  },
+  bulkDeleteBtn: {
+    background: '#dc2626', color: '#fff', border: 'none', borderRadius: 8,
+    padding: '10px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+  },
+  bulkDeleteBtnDisabled: {
+    background: '#fca5a5', color: '#fff', border: 'none', borderRadius: 8,
+    padding: '10px 18px', fontSize: 14, fontWeight: 700, cursor: 'not-allowed', whiteSpace: 'nowrap',
+  },
+  bulkCancelBtn: {
+    background: '#fff', color: '#64748b', border: '1.5px solid #e2e8f0', borderRadius: 8,
+    padding: '10px 16px', fontSize: 14, cursor: 'pointer', fontWeight: 500,
+  },
+  bulkError: {
+    background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626',
+    borderRadius: 8, padding: '10px 16px', fontSize: 13, marginBottom: 16,
+  },
+  bulkListBox: {
+    background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10,
+    padding: '8px 12px', marginBottom: 20, maxHeight: 220, overflowY: 'auto',
+    display: 'flex', flexDirection: 'column', gap: 4,
+  },
+  bulkListItem: {
+    display: 'flex', alignItems: 'center', gap: 10,
+    padding: '8px 6px', borderBottom: '1px solid #f1f5f9',
+  },
+  bulkListNum: {
+    fontSize: 11, fontWeight: 700, color: '#94a3b8',
+    background: '#e2e8f0', borderRadius: '50%', width: 20, height: 20,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  bulkListInfo: { display: 'flex', flexDirection: 'column', gap: 2 },
+  bulkListSubject: { fontSize: 13, fontWeight: 600, color: '#1e293b' },
+  bulkListItem2: { fontSize: 13, fontWeight: 500, color: '#059669' },
+  bulkListMeta: { fontSize: 11, color: '#94a3b8' },
   subjectGroup: { marginBottom: 32 },
   subjectHeader: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 },
   subjectName: { fontSize: 17, fontWeight: 700, color: '#1e293b' },
   sessionCount: { fontSize: 13, color: '#94a3b8', background: '#f1f5f9', borderRadius: 20, padding: '2px 10px' },
+  selectAllBtn: {
+    background: 'none', border: '1px solid #e2e8f0', borderRadius: 6,
+    padding: '3px 10px', fontSize: 12, cursor: 'pointer', color: '#64748b', fontWeight: 500,
+  },
   tableCard: { background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 6px rgba(0,0,0,0.06)' },
   table: { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' },
   viewBtn: { background: '#eff6ff', color: '#2563eb', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
@@ -357,7 +610,6 @@ const s = {
   emptyIcon: { fontSize: 48, marginBottom: 16 },
   primaryBtn: { marginTop: 16, background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer' },
 
-  /* 삭제 확인 모달 */
   modalOverlay: {
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
     background: 'rgba(15, 23, 42, 0.55)',
@@ -371,28 +623,14 @@ const s = {
     maxHeight: '90vh', overflowY: 'auto',
   },
   modalIcon: { fontSize: 40, textAlign: 'center', marginBottom: 12 },
-  modalTitle: {
-    fontSize: 20, fontWeight: 700, color: '#1e293b',
-    textAlign: 'center', margin: '0 0 12px',
-  },
-  modalDesc: {
-    fontSize: 14, color: '#64748b', textAlign: 'center',
-    margin: '0 0 20px', lineHeight: 1.6,
-  },
-  modalInfoBox: {
-    background: '#f8fafc', borderRadius: 10, padding: 16,
-    border: '1px solid #e2e8f0', marginBottom: 20,
-  },
-  modalInfoRow: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '6px 0',
-  },
+  modalTitle: { fontSize: 20, fontWeight: 700, color: '#1e293b', textAlign: 'center', margin: '0 0 12px' },
+  modalDesc: { fontSize: 14, color: '#64748b', textAlign: 'center', margin: '0 0 20px', lineHeight: 1.6 },
+  modalInfoBox: { background: '#f8fafc', borderRadius: 10, padding: 16, border: '1px solid #e2e8f0', marginBottom: 20 },
+  modalInfoRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' },
   modalInfoLabel: { fontSize: 13, color: '#64748b', fontWeight: 500 },
   modalInfoValue: { fontSize: 14, color: '#1e293b', fontWeight: 600 },
   modalConfirmSection: { marginBottom: 20 },
-  modalConfirmLabel: {
-    fontSize: 13, color: '#374151', margin: '0 0 8px', fontWeight: 500,
-  },
+  modalConfirmLabel: { fontSize: 13, color: '#374151', margin: '0 0 8px', fontWeight: 500 },
   modalConfirmHint: {
     fontFamily: 'monospace', fontSize: 14, color: '#dc2626',
     background: '#fef2f2', border: '1px dashed #fca5a5',
@@ -402,28 +640,20 @@ const s = {
   modalInput: {
     width: '100%', padding: '10px 14px', borderRadius: 8,
     border: '1.5px solid #e2e8f0', fontSize: 14, outline: 'none',
-    boxSizing: 'border-box', fontFamily: 'monospace',
-    transition: 'border-color 0.15s',
+    boxSizing: 'border-box', fontFamily: 'monospace', transition: 'border-color 0.15s',
   },
-  modalError: {
-    fontSize: 13, color: '#dc2626', marginTop: 8, fontWeight: 500,
-  },
-  modalActions: {
-    display: 'flex', gap: 8, justifyContent: 'flex-end',
-  },
+  modalError: { fontSize: 13, color: '#dc2626', marginTop: 8, fontWeight: 500 },
+  modalActions: { display: 'flex', gap: 8, justifyContent: 'flex-end' },
   modalCancelBtn: {
     background: '#fff', color: '#64748b', border: '1px solid #e2e8f0',
-    borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 600,
-    cursor: 'pointer',
+    borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer',
   },
   modalDeleteBtn: {
     background: '#dc2626', color: '#fff', border: 'none',
-    borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700,
-    cursor: 'pointer',
+    borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700, cursor: 'pointer',
   },
   modalDeleteBtnDisabled: {
     background: '#fca5a5', color: '#fff', border: 'none',
-    borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700,
-    cursor: 'not-allowed',
+    borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700, cursor: 'not-allowed',
   },
 };

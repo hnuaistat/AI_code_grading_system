@@ -27,7 +27,7 @@ from auth import (
 from schemas import (
     Token, LoginRequest, RegisterRequest, GradingCriteria, GradingSession,
     StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem, SubjectItemCreate,
-    ProblemRevisionRequest, RevisionLogItem
+    ProblemRevisionRequest, RevisionLogItem, SubjectUpdate, SubjectItemUpdate
 )
 from services.notebook_service import (
     extract_notebooks_from_zip, parse_student_id_from_filename,
@@ -303,6 +303,62 @@ async def create_subject_item(
 
     item = models.SubjectItem(subject_id=subject_id, name=body.name)
     db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "name": item.name, "created_at": item.created_at.isoformat()}
+
+
+@app.put("/subjects/{subject_id}")
+async def update_subject(
+    subject_id: int,
+    body: SubjectUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    subject = db.query(models.Subject).filter(
+        models.Subject.id == subject_id,
+        models.Subject.user_id == current_user["id"]
+    ).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
+
+    if body.name is not None:
+        subject.name = body.name
+    if body.code is not None:
+        subject.code = body.code if body.code.strip() else None
+    db.commit()
+    db.refresh(subject)
+    count = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.subject_id == subject.id
+    ).count()
+    items = [{"id": item.id, "name": item.name, "created_at": item.created_at.isoformat()} for item in subject.items]
+    return {"id": subject.id, "name": subject.name, "code": subject.code,
+            "session_count": count, "items": items, "created_at": subject.created_at.isoformat()}
+
+
+@app.put("/subjects/{subject_id}/items/{item_id}")
+async def update_subject_item(
+    subject_id: int,
+    item_id: int,
+    body: SubjectItemUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    subject = db.query(models.Subject).filter(
+        models.Subject.id == subject_id,
+        models.Subject.user_id == current_user["id"]
+    ).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
+
+    item = db.query(models.SubjectItem).filter(
+        models.SubjectItem.id == item_id,
+        models.SubjectItem.subject_id == subject_id
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="항목을 찾을 수 없습니다")
+
+    item.name = body.name
     db.commit()
     db.refresh(item)
     return {"id": item.id, "name": item.name, "created_at": item.created_at.isoformat()}
@@ -700,6 +756,20 @@ async def get_session(
                     "has_partial_score": p.has_partial_score,
                 } for p in r.problems],
             })
+        # 인메모리 세션: DB에서 subject/model 정보 보완
+        db_rec = db.query(models.GradingSessionDB).filter(
+            models.GradingSessionDB.id == session_id
+        ).first()
+        subject_name = db_rec.subject.name if db_rec and db_rec.subject else None
+        subject_code = db_rec.subject.code if db_rec and db_rec.subject else None
+        subject_item_name = None
+        if db_rec and db_rec.subject_item_id:
+            si = db.query(models.SubjectItem).filter(models.SubjectItem.id == db_rec.subject_item_id).first()
+            subject_item_name = si.name if si else None
+        grading_model = db_rec.grading_model if db_rec else None
+        created_at = _to_kst(db_rec.created_at) if db_rec else None
+        completed_at = _to_kst(db_rec.completed_at) if db_rec and db_rec.completed_at else None
+
         return {
             "session_id": session.session_id,
             "status": session.status,
@@ -709,6 +779,12 @@ async def get_session(
             "processed_students": session.processed_students,
             "results": results_stripped,
             "error": session.error,
+            "subject_name": subject_name,
+            "subject_code": subject_code,
+            "subject_item_name": subject_item_name,
+            "grading_model": grading_model,
+            "created_at": created_at,
+            "completed_at": completed_at,
         }
 
     # DB에서 로드
@@ -725,6 +801,11 @@ async def get_session(
         except Exception:
             pass
 
+    subject_item_name = None
+    if db_record.subject_item_id:
+        si = db.query(models.SubjectItem).filter(models.SubjectItem.id == db_record.subject_item_id).first()
+        subject_item_name = si.name if si else None
+
     return {
         "session_id": session_id,
         "status": db_record.status,
@@ -734,6 +815,12 @@ async def get_session(
         "processed_students": db_record.processed_students,
         "results": results,
         "error": db_record.error,
+        "subject_name": db_record.subject.name if db_record.subject else None,
+        "subject_code": db_record.subject.code if db_record.subject else None,
+        "subject_item_name": subject_item_name,
+        "grading_model": db_record.grading_model,
+        "created_at": _to_kst(db_record.created_at),
+        "completed_at": _to_kst(db_record.completed_at) if db_record.completed_at else None,
     }
 
 

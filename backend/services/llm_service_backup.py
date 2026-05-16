@@ -8,12 +8,27 @@ import httpx
 from openai import AsyncOpenAI
 import openai
 import json5
+from pydantic import BaseModel
 from schemas import PartialScoreCriterion
 
 
 class APIQuotaError(Exception):
     """OpenAI API 사용량 초과 시 발생하는 예외"""
     pass
+
+
+class GradingRubricScore(BaseModel):
+    item: str
+    score: float
+    max_score: float
+    reason: str
+
+
+class GradingResponse(BaseModel):
+    analysis: str
+    rubric_scores: List[GradingRubricScore]
+    feedback: str
+    total_score: float
 
 
 DEFAULT_MODEL = "openai/gpt-4o-mini"
@@ -266,7 +281,7 @@ async def grade_with_ai(
     # 실행 결과 (있으면 포함)
     execution_context = ""
     if execution_output:
-        execution_context = f"\n\n## ⚠️ 코드 실행 에러 정보 (참고만 — 채점에 직접 반영 금지)\n```\n{execution_output}\n```\n### 🚫 CRITICAL RULE: 실행 오류는 절대 reason에 포함 금지\n\n위 실행 오류는 **컨텍스트 정보**일 뿐, 이를 채점 이유(reason)에 쓰면 **안 됩니다**.\n\n❌ **절대 금지 reason 표현**:\n- '코드 실행 오류로 인해 평가 불가'\n- '런타임 에러 발생으로 정상 평가 불가'\n- '실행되지 않아 평가 불가'\n- '다른 변수 미정의로 인해 실행 불가'\n- '실행 오류 때문에 결과 생성 불가'\n- 기타 모든 '오류/에러/실행/불가/구현' 같은 키워드\n\n✅ **올바른 reason 표현** (코드 로직 기반):\n- 맞은 경우: \"cv2.threshold(src, 120, 255, cv2.THRESH_BINARY)로 올바르게 이진화 구현\"\n- 틀린 경우: \"np.bitwise_not은 인자 1개만 받는 함수인데 2개를 전달하여 논리 오류\"\n- 틀린 경우: \"루브릭에서 십진수 표현을 요구했으나 이진수로 표현함\"\n\n### 핵심 규칙 (반드시 따르기)\n- reason은 **항상** 해당 rubric 항목의 코드 로직 평가만 서술\n- \"실행 오류\", \"런타임\", \"불가\", \"오류\" 같은 단어 절대 금지\n- 다른 항목의 오류가 이 항목에 영향을 주면 안 됨\n- **이 항목의 코드에 로직 오류**가 있으면 0점 (하지만 이유는 로직만 설명)"
+        execution_context = f"\n\n## ⚠️ 코드 실행 에러 정보 (채점에 직접 반영 금지)\n```\n{execution_output}\n```\n⚠️ **CRITICAL**: reason에 \"오류/에러/실행/불가\" 같은 단어 절대 금지. reason은 코드 로직만 평가."
 
     # 전체 공통 가이드라인 (있으면 포함)
     global_guideline_text = ""
@@ -279,78 +294,45 @@ async def grade_with_ai(
         remaining_info = f"\n\n⚠️ **중요**: 아래 루브릭 항목들의 합계가 {full_score}점보다 작습니다. 아래 점수 항목 외에 **{remaining_score:.1f}점의 추가 배점**이 있으므로, 전체 코드 품질과 학생의 이해도를 종합적으로 평가하여 이 {remaining_score:.1f}점을 추가로 부여하세요."
 
     scoring_instruction = """2. **점수 부여 기준 (3단계)**:
-   - **부분점수 항목들** (0점 / 절반점수 / 만점 중 택일):
-     - ✅ **완전 충족** → 해당 항목의 **만점** (score = max_score)
-     - ⚠️ **부분 충족** → 해당 항목의 **절반점수** (score = max_score * 0.5)
-       * 예: "개념과 처리 과정 자세히 설명" (2점) → 개념은 설명했으나 과정 부족 → **1점**
-       * 예: "원본·이진화·결과 3장 출력" (1점) → 2장만 출력함 → **0.5점**
-       * 예: 항목에서 요구한 요소 중 일부만 충족
-     - ❌ **불충족** → **0점**
-     - ⚠️ **루브릭 요구사항 고려**: 각 항목의 요구사항(예: "십진수로 표현")을 확인하여 평가. 요구사항 위반이 있으면 감점 고려.
-     - ⚠️ **독립 평가 원칙** (CRITICAL): 다른 항목의 오류가 이 항목 점수를 결정하면 안 됨. 단, **이 항목 자체의 코드에 로직 오류**(잘못된 함수 사용, 잘못된 인자, 잘못된 로직 등)가 있으면 0점.
-     - ⚠️ **reason 필수 규칙** (매우 중요): reason은 반드시 해당 코드 로직에 대한 구체적 설명만. 절대 금지 표현:
-       * '실행 오류로 인해 평가 불가'
-       * '런타임 에러로 평가 불가'
-       * '다른 변수 미정의로 인해 실행 불가'
-       * 기타 모든 "오류/실행/불가" 표현
-       - ✅ 맞은 경우 예: "cv2.threshold(src, 120, 255, cv2.THRESH_BINARY)로 올바르게 이진화 구현"
-       - ✅ 부분 충족 예: "히스토그램 평활화의 개념은 잘 설명했으나 처리 과정 설명이 부족"
-       - ✅ 틀린 경우 예: "np.bitwise_not은 인자 1개만 받는데 2개를 전달하여 로직 오류"
-   - **추가 배점** (AI 자율 판단 - 위 항목들 외의 배점):
-     - 위 항목들 점수 합계 < full_score인 경우, 그 차이를 전체 코드 품질로 자율적으로 부여
-     - 코드 구현의 완성도, 효율성, 가독성 등을 종합 평가하여 추가 점수 부여
-     - 실행 오류가 있어도 → 추가 배점은 코드 로직 기반으로 판단 (오류 자체로 0점 금지)"""
-    consistency_instruction = """feedback과 score, reason과 score는 반드시 일관되어야 합니다.
+   - ✅ **완전 충족** → **만점** (score = max_score)
+   - ⚠️ **부분 충족** → **절반점수** (score = max_score * 0.5)
+   - ❌ **불충족** → **0점**
 
-**reason ↔ score 자동 매핑 규칙 (CRITICAL)**:
-- reason이 "완전 충족"을 시사하면 → score = max_score
-- reason이 "부분 충족"을 시사하면 → score = max_score * 0.5 (반드시!)
-- reason이 "완전 불충족"을 시사하면 → score = 0
-
-**"부분 충족"으로 간주되는 reason 표현 (이런 표현 쓰면 반드시 score = max_score * 0.5)**:
-- "A는 했지만 B는 안 함" / "A는 했으나 B는 못함"
-- "A는 있지만 B가 부족" / "A는 있으나 B가 없음"
-- "A는 잘했으나 B는 미흡"
-- "일부만 충족", "한 가지만 함", "절반만"
-- "요구사항 중 일부 누락"
-- "주요 부분은 했으나 세부사항 누락"
-
-**예시**:
-- reason: "평활화 설명은 있지만 YCrCb 변환 이유 설명이 없음" → score = max_score * 0.5 (절대 0이면 안 됨)
-- reason: "개념은 잘 설명했으나 처리 과정 설명이 부족" → score = max_score * 0.5
-- reason: "원본과 결과는 출력했으나 이진화 영상이 누락됨" → score = max_score * 0.5
-
-단, 해당 항목의 코드 자체에 로직 오류가 있으면 위 규칙과 무관하게 0점."""
+   **핵심**: 요구사항의 모든 요소를 충족하면 만점, 일부만 충족하면 절반, 불충족하면 0점. 다른 항목의 오류로 이 항목을 감점하면 안 됨."""
+    consistency_instruction = """**reason ↔ score 매핑 규칙 (CRITICAL)**:
+- reason이 "A는 했지만 B는 안 함" 같은 부분 충족 표현 → score = max_score * 0.5 (반드시!)
+- reason이 완전 충족 → score = max_score
+- reason이 완전 불충족 → score = 0
+- 해당 항목의 코드에 로직 오류 → score = 0"""
 
     system_prompt = f"""## 📋 응답 형식 (반드시 정확히 이것만 출력하세요)
 
 {{
   "analysis": "학생 코드의 핵심 로직 분석 (1-2문장)",
   "rubric_scores": [
-    {{"item": "조건 처리", "score": 5, "max_score": 5, "reason": "if-elif-else로 모든 경우를 올바르게 처리"}},
-    {{"item": "출력 형식", "score": 2.5, "max_score": 5, "reason": "지정된 형식으로 출력했으나 소수점 자리수가 부족"}}
+    {{"item": "조건 처리", "score": 5, "max_score": 5, "reason": "if-elif-else로 모든 경우를 올바르게 처리 (50-100자)"}},
+    {{"item": "출력 형식", "score": 2.5, "max_score": 5, "reason": "지정된 형식으로 출력했으나 소수점 자리수가 부족 (50-100자)"}}
   ],
-  "feedback": "잘한 점:\\n- 조건문 로직 명확\\n- 변수명 이해하기 쉬움\\n\\n개선점:\\n- 출력 포맷 조정\\n- 엣지 케이스 처리 추가",
+  "feedback": "개선점:\\n- 출력 포맷 조정\\n- 엣지 케이스 처리 추가\\n(125-150자 이내)",
   "total_score": 7.5
 }}
 
 ⚠️ **절대 지켜야 할 규칙**:
 - 응답의 첫 글자는 반드시 `{{` (다른 것 금지)
 - 응답의 마지막 글자는 반드시 `}}` (완전해야 함)
-- JSON만 출력 (마크다운 X, 설명 X, 자연어 X)
+- 자연어 설명, 마크다운 금지
 - 개행은 \\n으로만 표현 (실제 개행 금지)
+- **reason**: 한글로 한두 문장, **50-100자 이내** (절대)
+- **feedback**: 125-150자 이내 (개선점만, 2-3개)
 
 ---
 
-## 🚫 절대 금지 - 이렇게 시작하면 안 됨
+## 🚫 절대 금지
 
-❌ "우선 학생의 코드를 분석하겠습니다."
-❌ "먼저 조건문 부분을 살펴보겠습니다."
-❌ "다음과 같이 평가합니다."
-❌ "```json"으로 시작하는 마크다운
-❌ 분석이나 설명 텍스트
+❌ 자연어 설명 ("우선 분석하겠습니다", "다음과 같이...")
+❌ 마크다운 ("```json...", "###...")
 
-✅ 반드시 이렇게: `{{`로 직접 시작
+✅ 반드시: `{{`로 시작하는 응답만
 
 ---
 
@@ -359,50 +341,40 @@ async def grade_with_ai(
 당신은 현업 시니어 개발자이자 꼼꼼한 컴퓨터공학 전공 조교입니다.
 {global_guideline_text}{remaining_info}
 
-### 1. **다양성 존중**
-학생의 구현 방식이 모범 답안과 다르더라도, 논리가 타당하고 결과가 올바르면 정답으로 인정.
+**원칙**: 구현 방식이 다르면 다른 것 아님. 논리가 타당하고 요구사항을 충족하면 정답.
 
-### 2. **점수 부여 기준 (3단계만 허용)**
+### 1. **점수 부여 기준 (3단계)**
 {scoring_instruction}
 
-### 3. **reason 작성 규칙** (가장 중요)
+### 2. **reason 작성 규칙** (50-100자 이내, 한두 문장)
 **✅ 올바른 reason**:
-- "cv2.threshold(src, 120, 255, cv2.THRESH_BINARY)로 올바르게 이진화 구현" (만점)
-- "원본과 결과는 출력했으나 이진화 영상이 누락됨" (부분점수)
-- "np.bitwise_not은 인자 1개만 받는데 2개를 전달하여 로직 오류" (0점)
+- "cv2.threshold 올바르게 사용하여 이진화 구현" (만점)
+- "원본·결과는 출력했으나 이진화 영상 누락" (부분점수)
+- "np.bitwise_not은 1개 인자인데 2개 전달" (0점)
 
-**❌ 금지된 reason** (이렇게 쓰면 안 됨):
-- "런타임 에러 발생으로 평가 불가"
-- "변수 미정의로 인해 실행 불가"
-- "코드 실행 오류로 인해 생성 불가"
-- "다른 변수가 없어서 오류 발생"
+**❌ 금지된 reason**: "런타임 에러로 평가 불가" / "변수 미정의로 실행 불가"
 
-**규칙**: reason은 항상 **해당 항목의 요구사항**에 대한 **코드 로직 기반 판단**만 서술. 다른 항목의 오류나 실행 결과는 feedback에만 작성.
+**"부분 충족"으로 간주되는 reason 표현** (score = max_score * 0.5):
+- "A는 했지만 B는 안 함" / "A는 있지만 B가 부족"
+- "일부만 충족" / "요구사항 중 일부 누락"
 
-### 4. **루브릭 요구사항 중심 평가**
-- 항목명의 요구사항을 정확히 파악
-- 루브릭에 명시되지 않은 것으로 감점 금지
-- 예: "1행 3열 출력"이 요구사항인데 → `plt.show()` 누락으로 감점하면 안 됨
+### 3. **루브릭 외 감점 금지 (CRITICAL)**
+- 루브릭 항목명에 명시된 요구사항만 평가. 코드 실행 여부·변수명·`plt.show()` 등 명시되지 않은 것으로 절대 감점 금지.
 
-**항목 분석 방법**:
-1) 항목명을 읽고 요구사항 추출
-2) 학생 코드에서 각 요구사항 충족 여부 확인
-3) 모두 충족 → 만점 / 일부 충족 → 절반점수 / 불충족 → 0점
-
-### 5. **해설과 점수의 일관성**
+### 4. **해설과 점수의 일관성**
 {consistency_instruction}
 
-### 6. **에러와 채점의 독립성**
-- **이 항목 자체의 로직 오류**가 있으면 0점
-- **다른 항목의 오류**가 이 항목을 영향 주면 안 됨
-- **런타임 에러 가능성**은 feedback의 개선점에만 작성
+### 5. **각 항목 독립 채점 (절대 원칙)**
+- ⚠️ 각 루브릭 항목을 완전히 독립적으로 평가. 다른 항목의 오류/실패가 이 항목에 영향 X.
+- 예: cv2.add() 항목은 NumPy 항목 실패와 무관 / subplot은 앞 셀 에러와 무관 / 설명 항목은 실행 여부 무관.
+- 금지 표현: "전체 문항 0점", "앞선 오류로", "실행 오류로 인해".
+
+### 6. **에러는 feedback에만**
+- 실행 오류는 feedback 개선점에만 작성. 개별 reason에 "오류/에러/실행/앞선" 단어 금지.
 
 ---
 
-## 평가 절차
-1. **Analysis**: 학생 코드의 핵심 로직 분석
-2. **Rubric Evaluation**: 각 항목별 점수 부여
-3. **Feedback**: 잘한 점과 개선점 종합"""
+## 평가 절차: Analysis → Rubric Evaluation (각 항목 독립!) → Feedback"""
 
     # 문제별 평가 가이드라인
     guideline_text = ""
@@ -411,7 +383,7 @@ async def grade_with_ai(
 
     user_prompt = f"""[문제 {problem_id}] 다음 학생 코드를 평가해주세요.{guideline_text}
 
-## 모범 답안 (참고 자료 - 구현 방식이 다르면 틀린 것 아님)
+## 모범 답안 (참고 자료)
 ```python
 {answer_code[:2000]}
 ```
@@ -427,20 +399,38 @@ async def grade_with_ai(
 위의 평가 가이드라인과 루브릭에 기반하여 학생 코드를 평가하세요.
 모범 답안의 구현 방식과 다르더라도, 문제를 올바르게 해결했고 기준들을 충족한다면 정답으로 인정하세요.
 
-🚫 다시 한번 강조: 반드시 JSON만 반환하세요. 첫 글자는 반드시 `{{` 입니다."""
+🚫 **최종 체크리스트**:
+- ✅ 각 항목 독립 평가 (다른 항목 오류/루브릭 외로 감점 X)
+- ✅ reason: 50-100자, "오류/실행/앞선" 단어 금지
+- ✅ feedback: 125-150자 (개선점만, 2-3개)
+- ✅ `{{`로 시작하는 응답만 반환"""
 
+    provider, actual_model_name = parse_model_id(model or DEFAULT_MODEL)
     client, model_name = get_llm_client(model or DEFAULT_MODEL)
 
     try:
-        response = await _call_with_retry(lambda: client.chat.completions.create(
-            model=model_name,
-            max_tokens=4096,
-            temperature=0.5,
-            messages=[
+        # OpenAI: json_object 모드, Fireworks: json_schema 모드 (스키마 강제)
+        api_params = {
+            "model": model_name,
+            "max_tokens": 4096,
+            "temperature": 1.0,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ]
-        ))
+        }
+        if provider == "openai":
+            api_params["response_format"] = {"type": "json_object"}
+        elif provider == "fireworks":
+            api_params["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "GradingResponse",
+                    "schema": GradingResponse.model_json_schema()
+                }
+            }
+
+        response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
 
         content = response.choices[0].message.content
         tokens_used = response.usage.total_tokens if response.usage else 0

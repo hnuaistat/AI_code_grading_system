@@ -372,6 +372,14 @@ export default function UploadPage() {
   const [showNewItem, setShowNewItem] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [itemLoading, setItemLoading] = useState(false);
+  // 수정 state
+  const [editingSubject, setEditingSubject] = useState(false);
+  const [editSubjectName, setEditSubjectName] = useState('');
+  const [editSubjectCode, setEditSubjectCode] = useState('');
+  const [editSubjectLoading, setEditSubjectLoading] = useState(false);
+  const [editingItemId, setEditingItemId] = useState(null);
+  const [editItemName, setEditItemName] = useState('');
+  const [editItemLoading, setEditItemLoading] = useState(false);
 
   // 채점 모델 선택 state
   const [availableModels, setAvailableModels] = useState([]);
@@ -428,6 +436,52 @@ export default function UploadPage() {
       setError(err.response?.data?.detail || '항목 생성에 실패했습니다');
     } finally {
       setItemLoading(false);
+    }
+  };
+
+  const handleEditSubjectStart = () => {
+    const sub = subjects.find(s => String(s.id) === selectedSubjectId);
+    if (!sub) return;
+    setEditSubjectName(sub.name);
+    setEditSubjectCode(sub.code || '');
+    setEditingSubject(true);
+  };
+
+  const handleEditSubjectSave = async () => {
+    if (!editSubjectName.trim() || !selectedSubjectId) return;
+    setEditSubjectLoading(true);
+    try {
+      const res = await subjectAPI.update(selectedSubjectId, editSubjectName.trim(), editSubjectCode.trim() || null);
+      setSubjects(prev => prev.map(s => s.id === res.data.id ? { ...s, name: res.data.name, code: res.data.code } : s));
+      setEditingSubject(false);
+    } catch (err) {
+      setError(err.response?.data?.detail || '과목 수정에 실패했습니다');
+    } finally {
+      setEditSubjectLoading(false);
+    }
+  };
+
+  const handleEditItemStart = (item) => {
+    setEditingItemId(item.id);
+    setEditItemName(item.name);
+  };
+
+  const handleEditItemSave = async (itemId) => {
+    if (!editItemName.trim() || !selectedSubjectId) return;
+    setEditItemLoading(true);
+    try {
+      const res = await subjectAPI.updateItem(selectedSubjectId, itemId, editItemName.trim());
+      setSubjects(prev => prev.map(s =>
+        s.id === parseInt(selectedSubjectId)
+          ? { ...s, items: s.items.map(it => it.id === itemId ? { ...it, name: res.data.name } : it) }
+          : s
+      ));
+      setEditingItemId(null);
+      setEditItemName('');
+    } catch (err) {
+      setError(err.response?.data?.detail || '항목 수정에 실패했습니다');
+    } finally {
+      setEditItemLoading(false);
     }
   };
 
@@ -577,14 +631,42 @@ export default function UploadPage() {
                 </button>
               )}
             </div>
-            {selectedSubject && !showNewSubject && (
+            {selectedSubject && !showNewSubject && !editingSubject && (
               <div style={s.subjectInfo}>
                 <span style={s.subjectInfoName}>{selectedSubject.name}</span>
                 {selectedSubject.code && <span style={s.subjectInfoCode}>{selectedSubject.code}</span>}
                 <span style={s.subjectInfoCount}>채점 {selectedSubject.session_count}회</span>
+                <button style={s.editSubjectBtn} onClick={handleEditSubjectStart} title="과목명 수정">✏️</button>
               </div>
             )}
           </div>
+
+          {editingSubject && (
+            <div style={s.newSubjectForm}>
+              <input
+                style={s.input}
+                placeholder="과목명"
+                value={editSubjectName}
+                onChange={e => setEditSubjectName(e.target.value)}
+              />
+              <input
+                style={s.input}
+                placeholder="과목코드 (선택)"
+                value={editSubjectCode}
+                onChange={e => setEditSubjectCode(e.target.value)}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  style={s.createBtn}
+                  onClick={handleEditSubjectSave}
+                  disabled={editSubjectLoading || !editSubjectName.trim()}
+                >
+                  {editSubjectLoading ? '저장 중...' : '저장'}
+                </button>
+                <button style={s.cancelBtn} onClick={() => setEditingSubject(false)}>취소</button>
+              </div>
+            </div>
+          )}
 
           {showNewSubject && (
             <div style={s.newSubjectForm}>
@@ -654,23 +736,46 @@ export default function UploadPage() {
             {subjects.find(s2 => String(s2.id) === selectedSubjectId)?.items.length > 0 ? (
               <div style={s.itemsGrid}>
                 {subjects.find(s2 => String(s2.id) === selectedSubjectId).items.map(item => (
-                  <div
-                    key={item.id}
-                    style={{
-                      ...s.itemCard,
-                      borderColor: selectedItemId === String(item.id) ? '#a9ffbaff' : '#e2e8f0',
-                      background: selectedItemId === String(item.id) ? '#eff6ff' : '#fff',
-                    }}
-                    onClick={() => setSelectedItemId(String(item.id))}
-                  >
-                    <div style={s.itemName}>{item.name}</div>
-                    <button
-                      style={s.itemDeleteBtn}
-                      onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id); }}
+                  editingItemId === item.id ? (
+                    <div key={item.id} style={{ ...s.itemCard, borderColor: '#2563eb', background: '#eff6ff', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <input
+                        style={{ ...s.input, fontSize: 12, padding: '4px 8px' }}
+                        value={editItemName}
+                        onChange={e => setEditItemName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleEditItemSave(item.id); if (e.key === 'Escape') { setEditingItemId(null); } }}
+                        autoFocus
+                      />
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button style={{ ...s.createBtn, fontSize: 11, padding: '3px 8px', flex: 1 }}
+                          onClick={() => handleEditItemSave(item.id)} disabled={editItemLoading || !editItemName.trim()}>
+                          {editItemLoading ? '...' : '저장'}
+                        </button>
+                        <button style={{ ...s.cancelBtn, fontSize: 11, padding: '3px 6px' }}
+                          onClick={() => setEditingItemId(null)}>취소</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      key={item.id}
+                      style={{
+                        ...s.itemCard,
+                        borderColor: selectedItemId === String(item.id) ? '#a9ffbaff' : '#e2e8f0',
+                        background: selectedItemId === String(item.id) ? '#eff6ff' : '#fff',
+                      }}
+                      onClick={() => setSelectedItemId(String(item.id))}
                     >
-                      ✕
-                    </button>
-                  </div>
+                      <div style={s.itemName}>{item.name}</div>
+                      <button
+                        style={s.itemEditBtn}
+                        onClick={(e) => { e.stopPropagation(); handleEditItemStart(item); }}
+                        title="항목 이름 수정"
+                      >✏️</button>
+                      <button
+                        style={s.itemDeleteBtn}
+                        onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id); }}
+                      >✕</button>
+                    </div>
+                  )
                 ))}
               </div>
             ) : (
@@ -876,8 +981,10 @@ const s = {
   newItemForm: { marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
   itemsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 10 },
   itemCard: { border: '1.5px solid', borderRadius: 8, padding: '12px 10px', cursor: 'pointer', transition: 'all 0.2s', position: 'relative' },
-  itemName: { fontSize: 13, fontWeight: 600, color: '#1e293b', textAlign: 'center' },
+  itemName: { fontSize: 13, fontWeight: 600, color: '#1e293b', textAlign: 'center', paddingRight: 20 },
+  itemEditBtn: { position: 'absolute', top: 4, right: 26, background: 'none', border: 'none', color: '#94a3b8', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 },
   itemDeleteBtn: { position: 'absolute', top: 4, right: 4, background: '#f1f5f9', border: 'none', color: '#64748b', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  editSubjectBtn: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, padding: '0 4px', color: '#94a3b8' },
   empty: { fontSize: 13, color: '#94a3b8', textAlign: 'center', padding: '12px 0' },
 
   card: { background: '#fff', borderRadius: 16, padding: 32, boxShadow: '0 1px 8px rgba(0,0,0,0.07)' },
