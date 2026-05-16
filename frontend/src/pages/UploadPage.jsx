@@ -377,6 +377,7 @@ export default function UploadPage() {
   const [editSubjectName, setEditSubjectName] = useState('');
   const [editSubjectCode, setEditSubjectCode] = useState('');
   const [editSubjectLoading, setEditSubjectLoading] = useState(false);
+  const [editItemMode, setEditItemMode] = useState(false);
   const [editingItemId, setEditingItemId] = useState(null);
   const [editItemName, setEditItemName] = useState('');
   const [editItemLoading, setEditItemLoading] = useState(false);
@@ -478,6 +479,7 @@ export default function UploadPage() {
       ));
       setEditingItemId(null);
       setEditItemName('');
+      // 수정 모드 유지 (다른 항목도 계속 수정 가능)
     } catch (err) {
       setError(err.response?.data?.detail || '항목 수정에 실패했습니다');
     } finally {
@@ -703,11 +705,21 @@ export default function UploadPage() {
           <div style={s.itemsCard}>
             <div style={s.itemsHeader}>
               <span style={s.itemsLabel}>📋 세부 항목 (과제, 중간고사, 기말고사 등)</span>
-              {!showNewItem && (
-                <button style={s.addItemBtn} onClick={() => setShowNewItem(true)}>
-                  + 항목 추가
-                </button>
-              )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                {!editingItemId && !showNewItem && (
+                  <button
+                    style={editItemMode ? s.editItemModeActiveBtn : s.editItemModeBtn}
+                    onClick={() => { setEditItemMode(prev => !prev); setEditingItemId(null); }}
+                  >
+                    {editItemMode ? '✅ 수정 완료' : '✏️ 항목 수정'}
+                  </button>
+                )}
+                {!editItemMode && !showNewItem && (
+                  <button style={s.addItemBtn} onClick={() => setShowNewItem(true)}>
+                    + 항목 추가
+                  </button>
+                )}
+              </div>
             </div>
 
             {showNewItem && (
@@ -733,6 +745,12 @@ export default function UploadPage() {
               </div>
             )}
 
+            {editItemMode && (
+              <div style={s.editItemBanner}>
+                ✏️ 수정할 항목을 클릭하세요
+              </div>
+            )}
+
             {subjects.find(s2 => String(s2.id) === selectedSubjectId)?.items.length > 0 ? (
               <div style={s.itemsGrid}>
                 {subjects.find(s2 => String(s2.id) === selectedSubjectId).items.map(item => (
@@ -742,7 +760,10 @@ export default function UploadPage() {
                         style={{ ...s.input, fontSize: 12, padding: '4px 8px' }}
                         value={editItemName}
                         onChange={e => setEditItemName(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') handleEditItemSave(item.id); if (e.key === 'Escape') { setEditingItemId(null); } }}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') handleEditItemSave(item.id);
+                          if (e.key === 'Escape') setEditingItemId(null);
+                        }}
                         autoFocus
                       />
                       <div style={{ display: 'flex', gap: 4 }}>
@@ -759,21 +780,29 @@ export default function UploadPage() {
                       key={item.id}
                       style={{
                         ...s.itemCard,
-                        borderColor: selectedItemId === String(item.id) ? '#a9ffbaff' : '#e2e8f0',
-                        background: selectedItemId === String(item.id) ? '#eff6ff' : '#fff',
+                        borderColor: editItemMode
+                          ? '#f59e0b'
+                          : selectedItemId === String(item.id) ? '#a9ffbaff' : '#e2e8f0',
+                        background: editItemMode
+                          ? '#fffbeb'
+                          : selectedItemId === String(item.id) ? '#eff6ff' : '#fff',
+                        cursor: editItemMode ? 'pointer' : 'pointer',
                       }}
-                      onClick={() => setSelectedItemId(String(item.id))}
+                      onClick={() => {
+                        if (editItemMode) handleEditItemStart(item);
+                        else setSelectedItemId(String(item.id));
+                      }}
                     >
                       <div style={s.itemName}>{item.name}</div>
-                      <button
-                        style={s.itemEditBtn}
-                        onClick={(e) => { e.stopPropagation(); handleEditItemStart(item); }}
-                        title="항목 이름 수정"
-                      >✏️</button>
-                      <button
-                        style={s.itemDeleteBtn}
-                        onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id); }}
-                      >✕</button>
+                      {!editItemMode && (
+                        <button
+                          style={s.itemDeleteBtn}
+                          onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id); }}
+                        >✕</button>
+                      )}
+                      {editItemMode && (
+                        <span style={s.itemEditHint}>✏️</span>
+                      )}
                     </div>
                   )
                 ))}
@@ -984,7 +1013,11 @@ const s = {
   itemName: { fontSize: 13, fontWeight: 600, color: '#1e293b', textAlign: 'center', paddingRight: 20 },
   itemEditBtn: { position: 'absolute', top: 4, right: 26, background: 'none', border: 'none', color: '#94a3b8', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 },
   itemDeleteBtn: { position: 'absolute', top: 4, right: 4, background: '#f1f5f9', border: 'none', color: '#64748b', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  itemEditHint: { position: 'absolute', top: 4, right: 4, fontSize: 11, color: '#f59e0b' },
   editSubjectBtn: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, padding: '0 4px', color: '#94a3b8' },
+  editItemModeBtn: { background: 'none', border: '1px solid #f59e0b', color: '#d97706', borderRadius: 6, padding: '5px 12px', fontSize: 13, cursor: 'pointer', fontWeight: 500 },
+  editItemModeActiveBtn: { background: '#fef3c7', border: '1px solid #f59e0b', color: '#d97706', borderRadius: 6, padding: '5px 12px', fontSize: 13, cursor: 'pointer', fontWeight: 600 },
+  editItemBanner: { fontSize: 12, color: '#d97706', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 12px', marginBottom: 10 },
   empty: { fontSize: 13, color: '#94a3b8', textAlign: 'center', padding: '12px 0' },
 
   card: { background: '#fff', borderRadius: 16, padding: 32, boxShadow: '0 1px 8px rgba(0,0,0,0.07)' },
