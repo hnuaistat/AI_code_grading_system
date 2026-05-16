@@ -435,13 +435,10 @@ async def grade_with_ai(
                     "schema": GradingResponse.model_json_schema()
                 }
             }
-            # 모델별 추론(thinking) 비활성화
-            if "kimi" in model_name:
-                api_params["thinking"] = {"type": "disabled"}
-            elif "glm" in model_name:
-                api_params["thinking"] = {"type": "disabled"}
-            elif "qwen" in model_name:
-                api_params["extra_body"] = {"enable_thinking": False}
+            # GLM/Qwen3: reasoning_effort "none"으로 추론 비활성화 (Fireworks 공식 파라미터)
+            # kimi: Fireworks 문서에 없음 → 파라미터 없이 호출
+            if "glm" in model_name or "qwen" in model_name:
+                api_params["reasoning_effort"] = "none"
 
         response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
 
