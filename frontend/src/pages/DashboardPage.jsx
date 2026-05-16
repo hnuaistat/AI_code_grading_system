@@ -23,6 +23,9 @@ export default function DashboardPage() {
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeError, setResumeError] = useState('');
 
+  // 강제 중단
+  const [cancelling, setCancelling] = useState(false);
+
   const fetchSession = useCallback(async () => {
     try {
       const res = await gradingAPI.getSession(sessionId);
@@ -37,12 +40,27 @@ export default function DashboardPage() {
     fetchSession();
   }, [fetchSession]);
 
-  // 채점 중일 때만 2초 폴링 (완료/초과 시 자동 중단)
+  // 채점 중일 때만 2초 폴링 (완료/초과/중단 시 자동 중단)
   useEffect(() => {
-    if (session?.status === 'completed' || session?.status === 'quota_exceeded') return;
+    if (session?.status === 'completed'
+      || session?.status === 'quota_exceeded'
+      || session?.status === 'cancelled') return;
     const interval = setInterval(fetchSession, 2000);
     return () => clearInterval(interval);
   }, [session?.status, fetchSession]);
+
+  const handleCancel = async () => {
+    if (!window.confirm('채점을 강제 중단하시겠습니까?\n지금까지 채점된 결과는 보존되지만, 진행 중이던 학생의 결과는 저장되지 않을 수 있습니다.')) return;
+    setCancelling(true);
+    try {
+      await gradingAPI.cancelSession(sessionId);
+      await fetchSession();
+    } catch (err) {
+      setError(err.response?.data?.detail || '채점 중단에 실패했습니다');
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   const handleResume = async () => {
     if (!resumeAnswer || !resumeZip || !resumeCriteria) {
@@ -117,6 +135,7 @@ export default function DashboardPage() {
   const isRunning = session.status === 'running' || session.status === 'pending';
   const isDone = session.status === 'completed';
   const isQuotaExceeded = session.status === 'quota_exceeded';
+  const isCancelled = session.status === 'cancelled';
 
   const avgScore = isDone && session.results.length > 0
     ? session.results.reduce((acc, r) => acc + r.total_score, 0) / session.results.length
@@ -188,10 +207,32 @@ export default function DashboardPage() {
                 채점 중... {session.processed_students}/{session.total_students}명
                 {session.current_student && ` — ${session.current_student}`}
               </span>
-              <span style={s.progressPct}>{Math.round(session.progress)}%</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={s.progressPct}>{Math.round(session.progress)}%</span>
+                <button
+                  style={cancelling ? { ...s.cancelBtn, opacity: 0.6, cursor: 'wait' } : s.cancelBtn}
+                  onClick={handleCancel}
+                  disabled={cancelling}
+                  title="채점을 강제로 중단합니다. 지금까지 채점된 결과는 보존됩니다."
+                >
+                  {cancelling ? '중단 중...' : '🛑 강제 중단'}
+                </button>
+              </div>
             </div>
             <div style={s.progressBar}>
               <div style={{ ...s.progressFill, width: `${session.progress}%` }} />
+            </div>
+          </div>
+        )}
+
+        {isCancelled && (
+          <div style={s.cancelledBanner}>
+            <div style={s.cancelledIcon}>🛑</div>
+            <div style={{ flex: 1 }}>
+              <div style={s.cancelledTitle}>채점이 중단되었습니다</div>
+              <div style={s.cancelledDesc}>
+                {session.processed_students}/{session.total_students}명 채점 완료. 아래 표에서 지금까지의 결과를 확인할 수 있습니다.
+              </div>
             </div>
           </div>
         )}
@@ -223,9 +264,13 @@ export default function DashboardPage() {
         <div style={s.tableCard}>
           <div style={s.tableHeader}>
             <h2 style={s.tableTitle}>
-              {isDone ? `채점 완료 — ${session.results.length}명` : '채점 진행 중...'}
+              {isDone
+                ? `채점 완료 — ${session.results.length}명`
+                : isCancelled
+                  ? `채점 중단 — ${session.results.length}명 결과`
+                  : '채점 진행 중...'}
             </h2>
-            {isDone && (
+            {(isDone || (isCancelled && session.results.length > 0)) && (
               <button
                 style={downloadLoading ? {...s.dlBtn, opacity:0.7} : s.dlBtn}
                 onClick={handleDownload}
@@ -396,7 +441,20 @@ const s = {
   infoCode: { fontSize: 11, background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700 },
   infoDivider: { width: 1, height: 36, background: '#e2e8f0', margin: '0 4px' },
   progressCard: { background:'#fff', borderRadius:12, padding:'20px 24px', marginBottom:24, boxShadow:'0 1px 6px rgba(0,0,0,0.06)' },
-  progressTop: { display:'flex', justifyContent:'space-between', marginBottom:10 },
+  progressTop: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 },
+  cancelBtn: {
+    background: '#fef2f2', color: '#dc2626', border: '1.5px solid #fecaca',
+    borderRadius: 8, padding: '6px 14px', fontSize: 13, fontWeight: 700,
+    cursor: 'pointer', whiteSpace: 'nowrap',
+  },
+  cancelledBanner: {
+    background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: 12,
+    padding: '16px 20px', marginBottom: 24, display: 'flex',
+    alignItems: 'center', gap: 14,
+  },
+  cancelledIcon: { fontSize: 28 },
+  cancelledTitle: { fontSize: 15, fontWeight: 700, color: '#92400e', marginBottom: 4 },
+  cancelledDesc: { fontSize: 13, color: '#78350f', lineHeight: 1.5 },
   progressLabel: { fontSize:14, color:'#374151', fontWeight:500 },
   progressPct: { fontSize:14, fontWeight:700, color:'#2563eb' },
   progressBar: { height:10, background:'#e2e8f0', borderRadius:99, overflow:'hidden' },

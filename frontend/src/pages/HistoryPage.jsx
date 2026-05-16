@@ -24,10 +24,12 @@ function formatDuration(createdAt, completedAt) {
 
 function StatusBadge({ status }) {
   const cfg = {
-    completed: { bg: '#dcfce7', color: '#16a34a', label: '완료' },
-    running:   { bg: '#dbeafe', color: '#2563eb', label: '진행 중' },
-    pending:   { bg: '#f1f5f9', color: '#64748b', label: '대기' },
-    error:     { bg: '#fee2e2', color: '#dc2626', label: '오류' },
+    completed:      { bg: '#dcfce7', color: '#16a34a', label: '완료' },
+    running:        { bg: '#dbeafe', color: '#2563eb', label: '진행 중' },
+    pending:        { bg: '#f1f5f9', color: '#64748b', label: '대기' },
+    error:          { bg: '#fee2e2', color: '#dc2626', label: '오류' },
+    cancelled:      { bg: '#fef3c7', color: '#b45309', label: '중단됨' },
+    quota_exceeded: { bg: '#fee2e2', color: '#dc2626', label: '쿼터 초과' },
   }[status] || { bg: '#f1f5f9', color: '#64748b', label: status };
   return (
     <span style={{ background: cfg.bg, color: cfg.color, borderRadius: 20,
@@ -81,6 +83,26 @@ export default function HistoryPage() {
   const [bulkDeleteProgress, setBulkDeleteProgress] = useState(0);
   const [bulkDeleteError, setBulkDeleteError] = useState('');
   const [bulkConfirmText, setBulkConfirmText] = useState('');
+
+  // 강제 중단 진행 중인 세션 id 집합
+  const [cancellingIds, setCancellingIds] = useState(new Set());
+
+  const handleCancel = async (session) => {
+    if (!window.confirm(`'${session.subject_item_name || session.subject_name || session.session_id.slice(0, 8)}' 채점을 강제 중단하시겠습니까?\n지금까지 채점된 결과는 보존됩니다.`)) return;
+    setCancellingIds(prev => new Set(prev).add(session.session_id));
+    try {
+      await gradingAPI.cancelSession(session.session_id);
+      reloadHistory();
+    } catch (e) {
+      alert(e.response?.data?.detail || '강제 중단에 실패했습니다');
+    } finally {
+      setCancellingIds(prev => {
+        const next = new Set(prev);
+        next.delete(session.session_id);
+        return next;
+      });
+    }
+  };
 
   const reloadHistory = () => {
     setLoading(true);
@@ -303,7 +325,7 @@ export default function HistoryPage() {
                         <th style={{ ...th, width: '140px' }}>완료 시간</th>
                         <th style={{ ...th, textAlign: 'center', width: '110px' }}>채점 AI</th>
                         <th style={{ ...th, textAlign: 'center', width: '80px' }}>결과 보기</th>
-                        {!bulkDeleteMode && <th style={{ ...th, textAlign: 'center', width: '70px' }}>삭제</th>}
+                        {!bulkDeleteMode && <th style={{ ...th, textAlign: 'center', width: '90px' }}>관리</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -370,14 +392,26 @@ export default function HistoryPage() {
                             </td>
                             {!bulkDeleteMode && (
                               <td style={{ ...td, textAlign: 'center' }}>
-                                <button
-                                  style={session.status === 'running' ? s.deleteBtnDisabled : s.deleteBtn}
-                                  onClick={() => session.status !== 'running' && openDeleteModal(session)}
-                                  disabled={session.status === 'running'}
-                                  title={session.status === 'running' ? '진행 중인 채점은 삭제할 수 없습니다' : '채점 기록 삭제'}
-                                >
-                                  삭제
-                                </button>
+                                {session.status === 'running' ? (
+                                  <button
+                                    style={cancellingIds.has(session.session_id)
+                                      ? { ...s.cancelBtn, opacity: 0.6, cursor: 'wait' }
+                                      : s.cancelBtn}
+                                    onClick={e => { e.stopPropagation(); handleCancel(session); }}
+                                    disabled={cancellingIds.has(session.session_id)}
+                                    title="채점을 강제로 중단합니다 (지금까지 결과는 보존)"
+                                  >
+                                    {cancellingIds.has(session.session_id) ? '중단 중...' : '🛑 중단'}
+                                  </button>
+                                ) : (
+                                  <button
+                                    style={s.deleteBtn}
+                                    onClick={e => { e.stopPropagation(); openDeleteModal(session); }}
+                                    title="채점 기록 삭제"
+                                  >
+                                    삭제
+                                  </button>
+                                )}
                               </td>
                             )}
                           </tr>
@@ -606,6 +640,7 @@ const s = {
   viewBtnDisabled: { background: '#f1f5f9', color: '#94a3b8', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'default', fontSize: 13 },
   deleteBtn: { background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
   deleteBtnDisabled: { background: '#f1f5f9', color: '#cbd5e1', border: '1px solid #e2e8f0', borderRadius: 6, padding: '5px 14px', cursor: 'not-allowed', fontSize: 13 },
+  cancelBtn: { background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' },
   empty: { textAlign: 'center', color: '#94a3b8', padding: '60px 0', fontSize: 16 },
   emptyIcon: { fontSize: 48, marginBottom: 16 },
   primaryBtn: { marginTop: 16, background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer' },

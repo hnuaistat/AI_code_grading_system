@@ -31,14 +31,20 @@ class GradingResponse(BaseModel):
     total_score: float
 
 
-DEFAULT_MODEL = "openai/gpt-4o-mini"
+DEFAULT_MODEL = "fireworks/accounts/fireworks/models/kimi-k2p6"
 
 # 사용 가능한 모델 목록 (provider/model_id 형식)
 AVAILABLE_MODELS = [
-    {"id": "openai/gpt-4o-mini", "label": "gpt-4o-mini", "provider": "openai"},
-    {"id": "openai/gpt-4o", "label": "gpt-4o", "provider": "openai"},
-    {"id": "openai/gpt-4.1-mini", "label": "gpt-4.1-mini", "provider": "openai"},
-    {"id": "fireworks/accounts/fireworks/models/deepseek-v4-pro", "label": "deepseek-v4-pro", "provider": "fireworks"},
+    {"id": "fireworks/accounts/fireworks/models/kimi-k2p6",   "label": "kimi-k2.6",      "provider": "fireworks"},
+    {"id": "fireworks/accounts/fireworks/models/glm-5p1",     "label": "glm-5.1",        "provider": "fireworks"},
+    {"id": "fireworks/accounts/fireworks/models/qwen3p6-plus", "label": "qwen3.6-plus",  "provider": "fireworks"},
+    # OpenAI 모델 (필요 시 주석 해제)
+    # {"id": "openai/gpt-4o-mini",  "label": "gpt-4o-mini",  "provider": "openai"},
+    # {"id": "openai/gpt-4o",       "label": "gpt-4o",       "provider": "openai"},
+    # {"id": "openai/gpt-4.1-mini", "label": "gpt-4.1-mini", "provider": "openai"},
+    # Fireworks - 제거된 모델
+    # {"id": "fireworks/accounts/fireworks/models/deepseek-v4-pro", "label": "deepseek-v4-pro", "provider": "fireworks"},  # 추론 모델 - JSON 파싱 오류
+    # {"id": "fireworks/accounts/fireworks/models/deepseek-v3p2",   "label": "deepseek-v3.2",   "provider": "fireworks"},  # Fireworks serverless 종료
 ]
 
 
@@ -448,6 +454,15 @@ async def grade_with_ai(
                     "schema": GradingResponse.model_json_schema()
                 }
             }
+            # 모델별 추론(thinking) 비활성화
+            if "kimi" in model_name:
+                api_params["thinking"] = {"type": "disabled"}
+            elif "glm" in model_name:
+                api_params["thinking"] = {"type": "disabled"}
+            elif "deepseek" in model_name:
+                api_params["thinking"] = {"type": "disabled"}
+            elif "qwen" in model_name:
+                api_params["extra_body"] = {"enable_thinking": False, "reasoning": True}
 
         response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
 

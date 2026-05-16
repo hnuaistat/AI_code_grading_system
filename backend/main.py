@@ -5,7 +5,7 @@ import asyncio
 import io
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 from fastapi import (
     FastAPI, Depends, HTTPException, status, UploadFile, File,
@@ -49,6 +49,9 @@ app.add_middleware(
 
 # In-memory active sessions
 grading_sessions: Dict[str, GradingSession] = {}
+
+# 강제 중단 요청된 세션 id (background task 다음 iteration에서 종료)
+cancelled_sessions: Set[str] = set()
 
 
 # ─── Startup ───────────────────────────────────────────────────────────────────
@@ -555,8 +558,14 @@ async def run_grading_session(
     total = len(student_notebooks)
 
     quota_exceeded = False
+    cancelled = False
     session_total_tokens = 0
     for i, (filename, content) in enumerate(student_notebooks):
+        if session_id in cancelled_sessions:
+            cancelled = True
+            session.processed_students = i
+            session.progress = (i / total) * 100 if total else 0
+            break
         session.current_student = filename
         try:
             problem_results, error, student_tokens = await grade_student_notebook(
@@ -603,7 +612,11 @@ async def run_grading_session(
         session.processed_students = i + 1
         session.progress = ((i + 1) / total) * 100
 
-    if quota_exceeded:
+    if cancelled:
+        session.status = "cancelled"
+        session.current_student = None
+        session.error = "사용자 요청으로 채점이 중단되었습니다"
+    elif quota_exceeded:
         session.status = "quota_exceeded"
         session.current_student = None
         session.error = "OpenAI API 사용량이 초과되었습니다. API를 충전한 후 이어서 채점하세요."
@@ -620,17 +633,20 @@ async def run_grading_session(
             models.GradingSessionDB.id == session_id
         ).first()
         if db_record:
-            db_record.status = session.status
+            # cancel endpoint가 먼저 DB를 cancelled로 마킹했을 수 있으므로 유지
+            final_status = "cancelled" if session_id in cancelled_sessions else session.status
+            db_record.status = final_status
             db_record.progress = session.progress
             db_record.processed_students = session.processed_students
             db_record.results_json = json.dumps(results_data, ensure_ascii=False)
             db_record.error = session.error
             db_record.tokens_used = (db_record.tokens_used or 0) + session_total_tokens
-            if not quota_exceeded:
+            if final_status == "completed":
                 db_record.completed_at = datetime.utcnow()
             db.commit()
     finally:
         db.close()
+        cancelled_sessions.discard(session_id)
 
 
 @app.post("/grading/resume/{session_id}")
@@ -770,15 +786,17 @@ async def get_session(
         created_at = _to_kst(db_rec.created_at) if db_rec else None
         completed_at = _to_kst(db_rec.completed_at) if db_rec and db_rec.completed_at else None
 
+        # cancel 요청이 들어왔으면 즉시 'cancelled' 로 표시 (메모리 루프가 다음 iteration에서 종료됨)
+        is_cancelled = session_id in cancelled_sessions
         return {
             "session_id": session.session_id,
-            "status": session.status,
+            "status": "cancelled" if is_cancelled else session.status,
             "progress": session.progress,
-            "current_student": session.current_student,
+            "current_student": None if is_cancelled else session.current_student,
             "total_students": session.total_students,
             "processed_students": session.processed_students,
             "results": results_stripped,
-            "error": session.error,
+            "error": "사용자 요청으로 채점이 중단되었습니다" if is_cancelled else session.error,
             "subject_name": subject_name,
             "subject_code": subject_code,
             "subject_item_name": subject_item_name,
@@ -924,6 +942,45 @@ async def get_results(session_id: str, current_user=Depends(get_current_user), d
     return results
 
 
+@app.post("/grading/session/{session_id}/cancel")
+async def cancel_grading(
+    session_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """진행 중인 채점을 강제 중단. 지금까지 채점된 결과는 보존됨."""
+    db_record = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.id == session_id
+    ).first()
+    if not db_record:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    is_owner = db_record.user_id == current_user["id"]
+    is_admin = current_user.get("role") == "admin"
+    if not (is_owner or is_admin):
+        raise HTTPException(status_code=403, detail="중단 권한이 없습니다")
+
+    if db_record.status not in ("running", "pending"):
+        raise HTTPException(status_code=400, detail="진행 중인 채점이 아닙니다")
+
+    # 다음 iteration에서 종료되도록 플래그 설정
+    cancelled_sessions.add(session_id)
+
+    # 메모리 세션이 있으면 현재까지 결과를 DB에 즉시 반영
+    mem_session = grading_sessions.get(session_id)
+    if mem_session:
+        results_data = [r.model_dump() for r in mem_session.results]
+        db_record.results_json = json.dumps(results_data, ensure_ascii=False)
+        db_record.processed_students = mem_session.processed_students
+        db_record.progress = mem_session.progress
+
+    db_record.status = "cancelled"
+    db_record.error = "사용자 요청으로 채점이 중단되었습니다"
+    db.commit()
+
+    return {"message": "채점이 중단되었습니다", "status": "cancelled"}
+
+
 @app.delete("/grading/session/{session_id}")
 async def delete_session(
     session_id: str,
@@ -942,9 +999,9 @@ async def delete_session(
     if not (is_owner or is_admin):
         raise HTTPException(status_code=403, detail="삭제 권한이 없습니다")
 
-    # 진행 중 세션은 삭제 불가
+    # 진행 중 세션은 삭제 불가 (먼저 강제 중단해야 함)
     if db_record.status == "running":
-        raise HTTPException(status_code=400, detail="진행 중인 채점은 삭제할 수 없습니다")
+        raise HTTPException(status_code=400, detail="진행 중인 채점은 먼저 강제 중단 후 삭제할 수 있습니다")
 
     # FK로 연결된 수정 이력 먼저 삭제
     db.query(models.ProblemRevisionLog).filter(
@@ -953,6 +1010,7 @@ async def delete_session(
 
     # 메모리 세션도 정리 (있다면)
     grading_sessions.pop(session_id, None)
+    cancelled_sessions.discard(session_id)
 
     db.delete(db_record)
     db.commit()

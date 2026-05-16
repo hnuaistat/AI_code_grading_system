@@ -56,6 +56,7 @@ export const gradingAPI = {
   }),
   getSession: (sessionId) => API.get(`/grading/session/${sessionId}`),
   deleteSession: (sessionId) => API.delete(`/grading/session/${sessionId}`),
+  cancelSession: (sessionId) => API.post(`/grading/session/${sessionId}/cancel`),
   getResults: (sessionId) => API.get(`/grading/session/${sessionId}/results`),
   downloadExcel: (sessionId) => API.get(`/grading/session/${sessionId}/download`, { responseType: 'blob' }),
   getHistory: () => API.get('/grading/history'),
