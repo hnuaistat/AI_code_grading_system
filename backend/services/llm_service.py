@@ -349,7 +349,7 @@ async def grade_with_ai(
     {{"item": "조건 처리", "score": 5, "max_score": 5, "reason": "if-elif-else로 모든 경우를 올바르게 처리"}},
     {{"item": "출력 형식", "score": 2.5, "max_score": 5, "reason": "지정된 형식으로 출력했으나 소수점 자리수가 부족"}}
   ],
-  "feedback": "잘한 점:\\n- 조건문 로직 명확\\n- 변수명 이해하기 쉬움\\n\\n개선점:\\n- 출력 포맷 조정\\n- 엣지 케이스 처리 추가",
+  "feedback": "개선점:\\n- 출력 포맷 조정\\n- 엣지 케이스 처리 추가",
   "total_score": 7.5
 }}
 
@@ -398,12 +398,17 @@ async def grade_with_ai(
 - **다른 항목의 오류**가 이 항목을 영향 주면 안 됨
 - **런타임 에러 가능성**은 feedback의 개선점에만 작성
 
+### 7. **feedback 작성 규칙** (반드시 준수)
+- 개선점만 작성. 잘한 점(칭찬)은 절대 포함 금지
+- `*` 기호 사용 절대 금지 (마크다운 강조 표현 금지)
+- 형식: "개선점:\\n- 항목1\\n- 항목2"
+
 ---
 
 ## 평가 절차
 1. **Analysis**: 학생 코드의 핵심 로직 분석
 2. **Rubric Evaluation**: 각 항목별 점수 부여
-3. **Feedback**: 잘한 점과 개선점 종합"""
+3. **Feedback**: 개선점만 작성 (잘한 점 제외, * 기호 금지)"""
 
     # 문제별 평가 가이드라인
     guideline_text = ""
@@ -465,7 +470,7 @@ async def grade_with_ai(
 
         if not content:
             print(f"[ERROR] 빈 응답 수신 (model={model}, problem={problem_id})")
-            return [{"item": c.item, "max_score": c.score, "score": 0, "reason": "모델 빈 응답 오류"} for c in criteria], "모델이 응답을 생성하지 못했습니다", 0
+            return [{"item": c.item, "max_score": c.score, "score": 0, "reason": "모델 빈 응답 오류"} for c in criteria], "모델이 응답을 생성하지 못했습니다", 0, True
 
         # JSON 파싱 (마크다운 코드블록 제거)
         content = content.strip()

@@ -329,7 +329,7 @@ async def grade_with_ai(
 - 자연어 설명, 마크다운 금지
 - 개행은 \\n으로만 표현 (실제 개행 금지)
 - **reason**: 한글로 한두 문장, **50-100자 이내** (절대)
-- **feedback**: 125-150자 이내 (개선점만, 2-3개)
+- **feedback**: 125-150자 이내 (개선점만, 2-3개, * 기호 금지)
 
 ---
 
@@ -337,6 +337,8 @@ async def grade_with_ai(
 
 ❌ 자연어 설명 ("우선 분석하겠습니다", "다음과 같이...")
 ❌ 마크다운 ("```json...", "###...")
+❌ feedback에 * 기호 사용
+❌ feedback에 잘한 점(칭찬) 포함
 
 ✅ 반드시: `{{`로 시작하는 응답만
 
@@ -446,7 +448,7 @@ async def grade_with_ai(
 
         if not content:
             print(f"[ERROR] 빈 응답 수신 (model={model}, problem={problem_id})")
-            return [{"item": c.item, "max_score": c.score, "score": 0, "reason": "모델 빈 응답 오류"} for c in criteria], "모델이 응답을 생성하지 못했습니다", 0
+            return [{"item": c.item, "max_score": c.score, "score": 0, "reason": "모델 빈 응답 오류"} for c in criteria], "모델이 응답을 생성하지 못했습니다", 0, True
 
         # JSON 파싱 (마크다운 코드블록 제거)
         content = content.strip()
