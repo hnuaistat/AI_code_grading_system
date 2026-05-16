@@ -421,7 +421,7 @@ async def grade_with_ai(
         api_params = {
             "model": model_name,
             "max_tokens": 4096,
-            "temperature": 0.7,
+            "temperature": 1.0,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
