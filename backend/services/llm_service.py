@@ -42,8 +42,7 @@ AVAILABLE_MODELS = [
     # {"id": "openai/gpt-4o-mini",  "label": "gpt-4o-mini",  "provider": "openai"},
     # {"id": "openai/gpt-4o",       "label": "gpt-4o",       "provider": "openai"},
     # {"id": "openai/gpt-4.1-mini", "label": "gpt-4.1-mini", "provider": "openai"},
-    # Fireworks - 제거된 모델
-    # {"id": "fireworks/accounts/fireworks/models/deepseek-v4-pro", "label": "deepseek-v4-pro", "provider": "fireworks"},  # 추론 모델 - JSON 파싱 오류
+    {"id": "fireworks/accounts/fireworks/models/deepseek-v4-pro", "label": "deepseek-v4-pro", "provider": "fireworks"},
     # {"id": "fireworks/accounts/fireworks/models/deepseek-v3p2",   "label": "deepseek-v3.2",   "provider": "fireworks"},  # Fireworks serverless 종료
 ]
 
