@@ -331,9 +331,16 @@ function RubricEditor({ rubric, onChange }) {
                   <input
                     style={re.criteriaKeywordsInput}
                     placeholder="핵심단어 (쉼표로 구분)"
-                    value={(c.keywords || []).join(', ')}
+                    value={
+                      Array.isArray(c.keywords) && c.keywords.length > 0
+                        ? c.keywords.join(', ')
+                        : ''
+                    }
                     onChange={e => {
-                      const keywords = e.target.value.split(',').map(k => k.trim()).filter(k => k);
+                      const keywords = e.target.value
+                        .split(',')
+                        .map(k => k.trim())
+                        .filter(k => k.length > 0);
                       updateCriteria(pIdx, cIdx, 'keywords', keywords);
                     }}
                   />

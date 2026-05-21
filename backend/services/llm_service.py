@@ -281,20 +281,32 @@ async def decompose_rubric_item_with_ai(
 
         content = response.choices[0].message.content.strip()
 
-        # 마크다운 코드블록 제거
-        if content.startswith("```"):
-            lines = content.split("\n")
-            start = 1 if lines[0].startswith("```") else 0
-            end = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
-            content = "\n".join(lines[start:end])
+        # 마크다운 코드블록 제거 (```json ... ``` 또는 ``` ... ```)
+        if "```" in content:
+            # 첫 번째 ``` 찾기
+            first_backtick = content.find("```")
+            last_backtick = content.rfind("```")
+            if first_backtick != -1 and last_backtick > first_backtick:
+                # 첫 번째 ```의 끝 (json 타입 지시자 포함)
+                after_first = content.find("\n", first_backtick)
+                if after_first != -1:
+                    content = content[after_first + 1:last_backtick]
+                else:
+                    content = ""
 
-        # JSON 배열 파싱
+        # JSON 배열 추출 ([ ... ])
         arr_start = content.find("[")
         arr_end = content.rfind("]") + 1
-        if arr_start != -1 and arr_end > arr_start:
-            content = content[arr_start:arr_end]
+        if arr_start == -1 or arr_end <= arr_start:
+            raise ValueError(f"JSON 배열을 찾을 수 없습니다. 응답: {content[:200]}")
 
-        result = json5.loads(content)
+        content = content[arr_start:arr_end]
+
+        try:
+            result = json5.loads(content)
+        except json5.JSON5DecodeError as e:
+            print(f"[JSON5 Parse Error] {e} | Content: {content[:300]}")
+            raise ValueError(f"JSON 파싱 실패: {str(e)}")
         if not isinstance(result, list):
             raise ValueError("응답이 배열 형식이 아닙니다")
 
