@@ -56,10 +56,12 @@ const dz = {
 function RubricEditor({ rubric, onChange }) {
   const [totalScoreEdit, setTotalScoreEdit] = useState(null);
   const [decomposeModal, setDecomposeModal] = useState(false);
-  const [decomposeTarget, setDecomposeTarget] = useState(null); // { pIdx, cIdx, originalScore }
-  const [decomposeResult, setDecomposeResult] = useState([]); // [{item, score, keywords}]
+  const [decomposeTarget, setDecomposeTarget] = useState(null);
+  const [decomposeResult, setDecomposeResult] = useState([]);
   const [decomposeLoading, setDecomposeLoading] = useState(false);
   const [decomposeError, setDecomposeError] = useState('');
+  // 타이핑 중 keywords 문자열 임시 저장 (key: `${pIdx}-${cIdx}`)
+  const [keywordsText, setKeywordsText] = useState({});
 
   const updateField = (field, value) => {
     if (field === 'total_score') {
@@ -331,17 +333,27 @@ function RubricEditor({ rubric, onChange }) {
                   <input
                     style={re.criteriaKeywordsInput}
                     placeholder="핵심단어 (쉼표로 구분)"
-                    value={
-                      Array.isArray(c.keywords) && c.keywords.length > 0
-                        ? c.keywords.join(', ')
-                        : ''
-                    }
+                    value={(() => {
+                      const key = `${pIdx}-${cIdx}`;
+                      if (key in keywordsText) return keywordsText[key];
+                      return Array.isArray(c.keywords) ? c.keywords.join(', ') : '';
+                    })()}
                     onChange={e => {
+                      const key = `${pIdx}-${cIdx}`;
+                      setKeywordsText(prev => ({ ...prev, [key]: e.target.value }));
+                    }}
+                    onBlur={e => {
+                      const key = `${pIdx}-${cIdx}`;
                       const keywords = e.target.value
                         .split(',')
                         .map(k => k.trim())
                         .filter(k => k.length > 0);
                       updateCriteria(pIdx, cIdx, 'keywords', keywords);
+                      setKeywordsText(prev => {
+                        const next = { ...prev };
+                        delete next[key];
+                        return next;
+                      });
                     }}
                   />
                 </div>

@@ -31,6 +31,15 @@ class GradingResponse(BaseModel):
     total_score: float
 
 
+class DecomposedItemLLM(BaseModel):
+    item: str
+    keywords: List[str] = []
+
+
+class DecomposeResponse(BaseModel):
+    items: List[DecomposedItemLLM]
+
+
 DEFAULT_MODEL = "fireworks/accounts/fireworks/models/kimi-k2p6"
 
 # 사용 가능한 모델 목록 (provider/model_id 형식)
@@ -266,56 +275,50 @@ async def decompose_rubric_item_with_ai(
 
 위 항목을 독립적으로 채점 가능한 세부 항목들로 나누고, 각 항목의 핵심 키워드를 함께 제시하세요."""
 
+    provider, _ = parse_model_id(model or DEFAULT_MODEL)
     client, model_name = get_llm_client(model or DEFAULT_MODEL)
 
+    api_params = {
+        "model": model_name,
+        "max_tokens": 1024,
+        "temperature": 0.5,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+    }
+    if provider == "openai":
+        api_params["response_format"] = {"type": "json_object"}
+    elif provider == "fireworks":
+        api_params["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "DecomposeResponse",
+                "schema": DecomposeResponse.model_json_schema()
+            }
+        }
+
     try:
-        response = await _call_with_retry(lambda: client.chat.completions.create(
-            model=model_name,
-            max_tokens=1024,
-            temperature=0.5,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-        ))
+        response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
 
         content = response.choices[0].message.content.strip()
+        result_data = json5.loads(content)
 
-        # 마크다운 코드블록 제거 (```json ... ``` 또는 ``` ... ```)
-        if "```" in content:
-            # 첫 번째 ``` 찾기
-            first_backtick = content.find("```")
-            last_backtick = content.rfind("```")
-            if first_backtick != -1 and last_backtick > first_backtick:
-                # 첫 번째 ```의 끝 (json 타입 지시자 포함)
-                after_first = content.find("\n", first_backtick)
-                if after_first != -1:
-                    content = content[after_first + 1:last_backtick]
-                else:
-                    content = ""
-
-        # JSON 배열 추출 ([ ... ])
-        arr_start = content.find("[")
-        arr_end = content.rfind("]") + 1
-        if arr_start == -1 or arr_end <= arr_start:
-            raise ValueError(f"JSON 배열을 찾을 수 없습니다. 응답: {content[:200]}")
-
-        content = content[arr_start:arr_end]
-
-        try:
-            result = json5.loads(content)
-        except Exception as e:
-            print(f"[JSON5 Parse Error] {type(e).__name__}: {e} | Content: {content[:300]}")
-            raise ValueError(f"JSON 파싱 실패: {str(e)}")
-        if not isinstance(result, list):
-            raise ValueError("응답이 배열 형식이 아닙니다")
+        # json_schema 모드: {"items": [...]} 형태
+        # json_object/자유형 모드: [...] 형태 모두 처리
+        if isinstance(result_data, dict) and "items" in result_data:
+            result = result_data["items"]
+        elif isinstance(result_data, list):
+            result = result_data
+        else:
+            raise ValueError(f"예상치 못한 응답 형식: {content[:200]}")
 
         return [
             {
-                "item": r.get("item", ""),
-                "keywords": r.get("keywords", []) if isinstance(r.get("keywords"), list) else []
+                "item": r.get("item", "") if isinstance(r, dict) else "",
+                "keywords": r.get("keywords", []) if isinstance(r, dict) and isinstance(r.get("keywords"), list) else []
             }
-            for r in result if r.get("item")
+            for r in result if isinstance(r, dict) and r.get("item")
         ]
 
     except Exception as e:
