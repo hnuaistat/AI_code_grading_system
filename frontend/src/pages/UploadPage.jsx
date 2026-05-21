@@ -102,7 +102,7 @@ function RubricEditor({ rubric, onChange }) {
 
   const addCriteria = (pIdx) => {
     const problems = [...rubric.problems];
-    const criteria = [...problems[pIdx].partial_score_criteria, { item: '', score: 1 }];
+    const criteria = [...problems[pIdx].partial_score_criteria, { item: '', score: 1, keywords: [] }];
     problems[pIdx] = { ...problems[pIdx], partial_score_criteria: criteria };
     onChange({ ...rubric, problems });
   };
@@ -172,7 +172,7 @@ function RubricEditor({ rubric, onChange }) {
         problem_id: `Q${nextId}`,
         full_score: 5,
         evaluation_guideline: '',
-        partial_score_criteria: [{ item: '출력에 따라 AI가 자율적으로 부여하고 해설을 하시오', score: 5 }]
+        partial_score_criteria: [{ item: '출력에 따라 AI가 자율적으로 부여하고 해설을 하시오', score: 5, keywords: [] }]
       }]
     });
   };
@@ -295,37 +295,48 @@ function RubricEditor({ rubric, onChange }) {
               </div>
 
               {problem.partial_score_criteria.map((c, cIdx) => (
-                <div key={cIdx} style={re.criteriaRow}>
+                <div key={cIdx} style={re.criteriaColumn}>
+                  <div style={re.criteriaRow}>
+                    <input
+                      style={re.criteriaItemInput}
+                      value={c.item}
+                      onChange={e => updateCriteria(pIdx, cIdx, 'item', e.target.value)}
+                      placeholder="채점 항목 설명"
+                    />
+                    <input
+                      style={re.criteriaScoreInput}
+                      type="number"
+                      step="0.25"
+                      min="0"
+                      value={c.score ?? 0}
+                      onChange={e => updateCriteria(pIdx, cIdx, 'score', e.target.value)}
+                      onBlur={e => updateCriteria(pIdx, cIdx, 'score', parseFloat(e.target.value) || 0)}
+                    />
+                    <span style={re.scoreUnit}>점</span>
+                    <button
+                      style={{
+                        ...re.decomposeBtn,
+                        opacity: c.item.trim() ? 1 : 0.4,
+                        cursor: c.item.trim() ? 'pointer' : 'default',
+                      }}
+                      onClick={() => c.item.trim() && handleDecomposeItem(pIdx, cIdx)}
+                      title="동사 단위로 세분화"
+                    >분해</button>
+                    <button
+                      style={re.removeCriteriaBtn}
+                      onClick={() => removeCriteria(pIdx, cIdx)}
+                      title="항목 삭제"
+                    >✕</button>
+                  </div>
                   <input
-                    style={re.criteriaItemInput}
-                    value={c.item}
-                    onChange={e => updateCriteria(pIdx, cIdx, 'item', e.target.value)}
-                    placeholder="채점 항목 설명"
-                  />
-                  <input
-                    style={re.criteriaScoreInput}
-                    type="number"
-                    step="0.25"
-                    min="0"
-                    value={c.score ?? 0}
-                    onChange={e => updateCriteria(pIdx, cIdx, 'score', e.target.value)}
-                    onBlur={e => updateCriteria(pIdx, cIdx, 'score', parseFloat(e.target.value) || 0)}
-                  />
-                  <span style={re.scoreUnit}>점</span>
-                  <button
-                    style={{
-                      ...re.decomposeBtn,
-                      opacity: c.item.trim() ? 1 : 0.4,
-                      cursor: c.item.trim() ? 'pointer' : 'default',
+                    style={re.criteriaKeywordsInput}
+                    placeholder="핵심단어 (쉼표로 구분)"
+                    value={(c.keywords || []).join(', ')}
+                    onChange={e => {
+                      const keywords = e.target.value.split(',').map(k => k.trim()).filter(k => k);
+                      updateCriteria(pIdx, cIdx, 'keywords', keywords);
                     }}
-                    onClick={() => c.item.trim() && handleDecomposeItem(pIdx, cIdx)}
-                    title="동사 단위로 세분화"
-                  >분해</button>
-                  <button
-                    style={re.removeCriteriaBtn}
-                    onClick={() => removeCriteria(pIdx, cIdx)}
-                    title="항목 삭제"
-                  >✕</button>
+                  />
                 </div>
               ))}
 
@@ -476,13 +487,18 @@ const re = {
   criteriaSection: { marginTop: 4 },
   criteriaHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   mismatchWarn: { fontSize: 12, color: '#dc2626', fontWeight: 600, background: '#fef2f2', padding: '2px 8px', borderRadius: 4 },
-  criteriaRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 },
+  criteriaColumn: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 },
+  criteriaRow: { display: 'flex', alignItems: 'center', gap: 8 },
   criteriaItemInput: {
     flex: 1, padding: '8px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 13, outline: 'none',
   },
   criteriaScoreInput: {
     padding: '8px 10px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 13, width: 60,
     outline: 'none', textAlign: 'right',
+  },
+  criteriaKeywordsInput: {
+    padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 12,
+    outline: 'none', background: '#f9fafb', fontStyle: 'italic', color: '#64748b',
   },
   removeCriteriaBtn: {
     background: 'none', border: '1px solid #e2e8f0', color: '#94a3b8', borderRadius: 6,

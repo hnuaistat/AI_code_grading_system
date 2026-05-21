@@ -362,7 +362,8 @@ async def grade_with_ai(
     for c in criteria:
         line = f"- {c.item}: 최대 {c.score}점"
         if c.keywords:
-            line += f" [핵심단어: {', '.join(c.keywords)}]"
+            keywords_str = ', '.join(c.keywords)
+            line += f" [필수 키워드: {keywords_str}] — 키워드 없으면 0점, 있으면 파라미터/맥락/함수명까지 올바르게 사용했는지 검토"
         rubric_lines.append(line)
     rubric_text = "\n".join(rubric_lines)
 
@@ -444,8 +445,19 @@ async def grade_with_ai(
 당신은 현업 시니어 개발자이자 꼼꼼한 컴퓨터공학 전공 조교입니다.
 {global_guideline_text}{remaining_info}
 
-### 1. **다양성 존중**
+### 1. **다양성 존중 + 필수 키워드 검사**
 학생의 구현 방식이 모범 답안과 다르더라도, 논리가 타당하고 결과가 올바르면 정답으로 인정.
+
+**필수 키워드 규칙** (루브릭에 [필수 키워드]가 명시된 경우):
+- ✅ **키워드 포함 + 올바른 맥락/파라미터** → 만점
+  * 예: "[필수 키워드: cv2.threshold, 120, THRESH_BINARY]"
+  * 학생 코드: `cv2.threshold(src, 120, 255, cv2.THRESH_BINARY)` → 만점 (파라미터 120 정확함)
+- ⚠️ **키워드 포함 + 파라미터/맥락 오류** → 부분점수 또는 감점
+  * 학생 코드: `cv2.threshold(src, 150, 255, cv2.THRESH_BINARY)` → 파라미터 120이 아닌 150 → 부분점수 또는 0점
+- ❌ **키워드 없음 또는 간접적 표현** → 0점
+  * 예: "변환 후 십진수" 형태는 인정하지 않음 — 명시적으로 포함되어야 함
+
+**평가 방법**: 키워드는 필수지만, 있을 때는 반드시 **파라미터, 함수명, 문맥까지 함께 검토**하여 올바르게 사용했는지 판단.
 
 ### 2. **점수 부여 기준 (3단계만 허용)**
 {scoring_instruction}
