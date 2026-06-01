@@ -40,6 +40,24 @@ class DecomposeResponse(BaseModel):
     items: List[DecomposedItemLLM]
 
 
+class RubricPartialCriterionLLM(BaseModel):
+    item: str
+    score: float
+
+
+class RubricProblemLLM(BaseModel):
+    problem_id: str
+    full_score: float
+    evaluation_guideline: str = ""
+    partial_score_criteria: List[RubricPartialCriterionLLM] = []
+
+
+class RubricResponse(BaseModel):
+    exam_title: str = ""
+    global_evaluation_guideline: str = ""
+    problems: List[RubricProblemLLM]
+
+
 DEFAULT_MODEL = "fireworks/accounts/fireworks/models/kimi-k2p6"
 
 # 사용 가능한 모델 목록 (provider/model_id 형식)
@@ -191,18 +209,31 @@ async def generate_rubric_with_ai(
 
 위 문제들의 정답 코드를 분석하여, 가이드라인에 맞는 루브릭 JSON을 생성하세요."""
 
+    provider, _ = parse_model_id(model or DEFAULT_MODEL)
     client, model_name = get_llm_client(model or DEFAULT_MODEL)
 
+    api_params: Dict[str, Any] = {
+        "model": model_name,
+        "max_tokens": 4096,
+        "temperature": 0.5,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+    }
+    if provider == "openai":
+        api_params["response_format"] = {"type": "json_object"}
+    elif provider == "fireworks":
+        api_params["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "RubricResponse",
+                "schema": RubricResponse.model_json_schema()
+            }
+        }
+
     try:
-        response = await _call_with_retry(lambda: client.chat.completions.create(
-            model=model_name,
-            max_tokens=4096,
-            temperature=0.5,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-        ))
+        response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
 
         content = response.choices[0].message.content.strip()
 
