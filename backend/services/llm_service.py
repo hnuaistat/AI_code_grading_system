@@ -215,7 +215,7 @@ async def generate_rubric_with_ai(
     api_params: Dict[str, Any] = {
         "model": model_name,
         "max_tokens": 4096,
-        "temperature": 0.5,
+        "temperature": 0.2,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
