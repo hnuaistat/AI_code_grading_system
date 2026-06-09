@@ -545,6 +545,18 @@ def _extract_student_info(nb_content: bytes) -> tuple[str, str]:
     return "", ""
 
 
+def _dump_strip_images(r: dict) -> dict:
+    """DB 저장용: code_cells/preamble_cells에서 base64 이미지만 제거, 텍스트는 보존"""
+    for p in r.get("problems", []):
+        for cell in p.get("code_cells", []):
+            for out in cell.get("outputs", []):
+                out["image"] = None
+        for cell in p.get("preamble_cells", []):
+            for out in cell.get("outputs", []):
+                out["image"] = None
+    return r
+
+
 async def run_grading_session(
     session_id: str,
     answer_bytes: bytes,
@@ -629,7 +641,7 @@ async def run_grading_session(
     # Persist to DB
     db = SessionLocal()
     try:
-        results_data = [r.model_dump() for r in session.results]
+        results_data = [_dump_strip_images(r.model_dump()) for r in session.results]
         db_record = db.query(models.GradingSessionDB).filter(
             models.GradingSessionDB.id == session_id
         ).first()
@@ -970,7 +982,7 @@ async def cancel_grading(
     # 메모리 세션이 있으면 현재까지 결과를 DB에 즉시 반영
     mem_session = grading_sessions.get(session_id)
     if mem_session:
-        results_data = [r.model_dump() for r in mem_session.results]
+        results_data = [_dump_strip_images(r.model_dump()) for r in mem_session.results]
         db_record.results_json = json.dumps(results_data, ensure_ascii=False)
         db_record.processed_students = mem_session.processed_students
         db_record.progress = mem_session.progress
@@ -1397,7 +1409,7 @@ async def download_excel(
 
     # ── Sheet 2: AI 분석결과 (세부 채점항목) ─────────────────────────────
     ws2 = wb.create_sheet("AI분석결과")
-    detail_headers = ["학번", "이름", "문제", "채점항목", "최대점수", "획득점수", "AI피드백", "AI종합피드백"]
+    detail_headers = ["학번", "이름", "문제", "최대점수", "획득점수", "채점항목", "학생답변", "AI피드백", "AI종합피드백"]
     for col, h in enumerate(detail_headers, 1):
         cell = ws2.cell(row=1, column=col, value=h)
         cell.font = header_font
@@ -1408,28 +1420,31 @@ async def download_excel(
     row = 2
     for student in original_results:
         for problem in student.problems:
+            student_answer = "\n\n".join(
+                c.source for c in problem.code_cells if c.source.strip()
+            ) if problem.code_cells else ""
             for ps_idx, ps in enumerate(problem.partial_scores):
                 ws2.cell(row=row, column=1, value=student.student_id).alignment = center_align
                 ws2.cell(row=row, column=2, value=student.student_name or "").alignment = center_align
                 ws2.cell(row=row, column=3, value=f"Q{problem.problem_id}").alignment = center_align
-                ws2.cell(row=row, column=4, value=ps.item).alignment = center_align
-                ws2.cell(row=row, column=5, value=ps.max_score).alignment = center_align
-                score_cell = ws2.cell(row=row, column=6, value=ps.score)
+                ws2.cell(row=row, column=4, value=ps.max_score).alignment = center_align
+                score_cell = ws2.cell(row=row, column=5, value=ps.score)
                 score_cell.alignment = center_align
                 # 획득점수 컬럼 색상: AI 오류(노랑) > 부분점수(파랑) 우선순위
-                # AI 오류는 problem 레벨, 부분점수는 항목별 (0 < score < max_score)
                 if problem.has_ai_error:
                     score_cell.fill = ai_error_fill
                 elif 0 < float(ps.score) < float(ps.max_score):
                     score_cell.fill = partial_score_fill
-                ws2.cell(row=row, column=7, value=ps.reason).alignment = wrap_align
+                ws2.cell(row=row, column=6, value=ps.item).alignment = center_align
                 if ps_idx == 0:
-                    ws2.cell(row=row, column=8, value=problem.ai_feedback or "").alignment = wrap_align
-                for c in range(1, 9):
+                    ws2.cell(row=row, column=7, value=student_answer).alignment = wrap_align
+                    ws2.cell(row=row, column=9, value=problem.ai_feedback or "").alignment = wrap_align
+                ws2.cell(row=row, column=8, value=ps.reason).alignment = wrap_align
+                for c in range(1, 10):
                     ws2.cell(row=row, column=c).border = thin_border
                 row += 1
 
-    for col in range(1, 9):
+    for col in range(1, 10):
         max_len = max(
             (len(str(ws2.cell(r2, col).value or "")) for r2 in range(1, row)),
             default=0
