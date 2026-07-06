@@ -33,7 +33,7 @@ function StatusBadge({ status }) {
   }[status] || { bg: '#f1f5f9', color: '#64748b', label: status };
   return (
     <span style={{ background: cfg.bg, color: cfg.color, borderRadius: 20,
-      padding: '3px 12px', fontSize: 12, fontWeight: 600 }}>
+      padding: '3px 12px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
       {cfg.label}
     </span>
   );
@@ -389,15 +389,15 @@ export default function HistoryPage() {
                             style={{ cursor: 'pointer', width: 15, height: 15 }}
                           />
                         </th>
-                        <th style={{ ...th, width: '120px' }}>날짜</th>
-                        <th style={{ ...th, width: '72px' }}>상태</th>
+                        <th style={{ ...th, width: '132px' }}>날짜</th>
+                        <th style={{ ...th, width: '88px' }}>상태</th>
                         <th style={th}>세부 항목</th>
                         <th style={{ ...th, textAlign: 'center', width: '64px' }}>학생 수</th>
-                        <th style={{ ...th, width: '120px' }}>완료 시간</th>
+                        <th style={{ ...th, width: '132px' }}>완료 시간</th>
                         <th style={{ ...th, textAlign: 'center', width: '96px' }}>채점 AI</th>
                         <th style={{ ...th, textAlign: 'center', width: '68px' }}>결과 보기</th>
-                        <th style={{ ...th, textAlign: 'center', width: '104px' }}>새 AI 채점</th>
-                        <th style={{ ...th, textAlign: 'center', width: '68px' }}>삭제</th>
+                        <th style={{ ...th, textAlign: 'center', width: '106px' }}>새 AI 채점</th>
+                        <th style={{ ...th, textAlign: 'center', width: '66px' }}>삭제</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -442,7 +442,7 @@ export default function HistoryPage() {
                                 formatDate(session.created_at)
                               )}
                             </td>
-                            <td style={td}><StatusBadge status={session.status} /></td>
+                            <td style={{ ...td, padding: '14px 8px' }}><StatusBadge status={session.status} /></td>
                             <td style={td} onClick={e => e.stopPropagation()}>
                               {editingItemId === session.session_id ? (
                                 <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
@@ -772,7 +772,7 @@ const s = {
     background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6,
     padding: '6px 14px', cursor: 'pointer', fontSize: 14, color: '#92400e', fontWeight: 500,
   },
-  main: { maxWidth: 1200, margin: '0 auto', padding: '32px 24px' },
+  main: { maxWidth: 1100, margin: '0 auto', padding: '32px 24px' },
   filterBar: { display: 'flex', gap: 12, marginBottom: 28, alignItems: 'center' },
   search: { flex: 1, padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none' },
   select: { padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none', background: '#fff', cursor: 'pointer' },
