@@ -343,10 +343,17 @@ export default function HistoryPage() {
                 roots.push(s);
               }
             });
-            const displayRows = roots.flatMap(r => [
-              { session: r, isChild: false },
-              ...(childrenMap[r.session_id] || []).map(c => ({ session: c, isChild: true })),
-            ]);
+            const displayRows = roots.flatMap(r => {
+              const kids = childrenMap[r.session_id] || [];
+              const inGroup = kids.length > 0;
+              return [
+                { session: r, isChild: false, inGroup, isGroupStart: inGroup, isGroupEnd: false },
+                ...kids.map((c, i) => ({
+                  session: c, isChild: true, inGroup: true,
+                  isGroupStart: false, isGroupEnd: i === kids.length - 1,
+                })),
+              ];
+            });
 
             return (
               <div key={subjectName} style={s.subjectGroup}>
@@ -382,19 +389,19 @@ export default function HistoryPage() {
                             style={{ cursor: 'pointer', width: 15, height: 15 }}
                           />
                         </th>
-                        <th style={{ ...th, width: '140px' }}>날짜</th>
-                        <th style={{ ...th, width: '90px' }}>상태</th>
-                        <th style={{ ...th, width: '120px' }}>세부 항목</th>
-                        <th style={{ ...th, textAlign: 'center', width: '70px' }}>학생 수</th>
-                        <th style={{ ...th, width: '140px' }}>완료 시간</th>
-                        <th style={{ ...th, textAlign: 'center', width: '110px' }}>채점 AI</th>
-                        <th style={{ ...th, textAlign: 'center', width: '80px' }}>결과 보기</th>
-                        <th style={{ ...th, textAlign: 'center', width: '108px' }}>새 AI 채점</th>
-                        <th style={{ ...th, textAlign: 'center', width: '72px' }}>삭제</th>
+                        <th style={{ ...th, width: '120px' }}>날짜</th>
+                        <th style={{ ...th, width: '72px' }}>상태</th>
+                        <th style={th}>세부 항목</th>
+                        <th style={{ ...th, textAlign: 'center', width: '64px' }}>학생 수</th>
+                        <th style={{ ...th, width: '120px' }}>완료 시간</th>
+                        <th style={{ ...th, textAlign: 'center', width: '96px' }}>채점 AI</th>
+                        <th style={{ ...th, textAlign: 'center', width: '68px' }}>결과 보기</th>
+                        <th style={{ ...th, textAlign: 'center', width: '104px' }}>새 AI 채점</th>
+                        <th style={{ ...th, textAlign: 'center', width: '68px' }}>삭제</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {displayRows.map(({ session, isChild }) => {
+                      {displayRows.map(({ session, isChild, inGroup, isGroupStart, isGroupEnd }) => {
                         const isChecked = selectedIds.has(session.session_id);
                         const isDeletable = session.status !== 'running';
                         const canRegrade = session.can_regrade && session.status === 'completed';
@@ -402,13 +409,14 @@ export default function HistoryPage() {
                           <tr
                             key={session.session_id}
                             style={{
-                              borderBottom: '1px solid #f1f5f9',
-                              background: isChecked ? '#fef2f2' : 'transparent',
+                              borderBottom: isGroupEnd ? '2px solid #bfdbfe' : '1px solid #f1f5f9',
+                              borderTop: isGroupStart ? '2px solid #bfdbfe' : undefined,
+                              background: isChecked ? '#fef2f2' : (inGroup ? '#f7faff' : 'transparent'),
                               cursor: isDeletable ? 'pointer' : 'default',
                             }}
                             onClick={() => { if (isDeletable) toggleSelect(session.session_id); }}
                           >
-                            <td style={{ ...td, textAlign: 'center' }}>
+                            <td style={{ ...td, textAlign: 'center', boxShadow: inGroup ? 'inset 3px 0 0 #93c5fd' : 'none' }}>
                               {isDeletable ? (
                                 <input
                                   type="checkbox"
@@ -472,14 +480,14 @@ export default function HistoryPage() {
                             <td style={{ ...td, color: '#64748b', fontSize: 13 }}>
                               {session.completed_at ? formatDate(session.completed_at) : '-'}
                             </td>
-                            <td style={{ ...td, textAlign: 'center' }}>
+                            <td style={{ ...td, padding: '14px 4px', textAlign: 'center' }}>
                               {session.grading_model ? (
                                 <ModelBadge model={session.grading_model} label={session.grading_model_label} />
                               ) : (
                                 <span style={{ color: '#cbd5e1', fontSize: 12 }}>—</span>
                               )}
                             </td>
-                            <td style={{ ...td, textAlign: 'center' }}>
+                            <td style={{ ...td, padding: '14px 4px', textAlign: 'center' }}>
                               <button
                                 style={session.status === 'completed' ? s.viewBtn : s.viewBtnDisabled}
                                 onClick={e => { e.stopPropagation(); session.status === 'completed' && navigate(`/dashboard/${session.session_id}`); }}
@@ -764,7 +772,7 @@ const s = {
     background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6,
     padding: '6px 14px', cursor: 'pointer', fontSize: 14, color: '#92400e', fontWeight: 500,
   },
-  main: { maxWidth: 1000, margin: '0 auto', padding: '32px 24px' },
+  main: { maxWidth: 1200, margin: '0 auto', padding: '32px 24px' },
   filterBar: { display: 'flex', gap: 12, marginBottom: 28, alignItems: 'center' },
   search: { flex: 1, padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none' },
   select: { padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none', background: '#fff', cursor: 'pointer' },
@@ -820,8 +828,8 @@ const s = {
   },
   tableCard: { background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 6px rgba(0,0,0,0.06)' },
   table: { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' },
-  viewBtn: { background: '#eff6ff', color: '#2563eb', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
-  viewBtnDisabled: { background: '#f1f5f9', color: '#94a3b8', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'default', fontSize: 13 },
+  viewBtn: { background: '#eff6ff', color: '#2563eb', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' },
+  viewBtnDisabled: { background: '#f1f5f9', color: '#94a3b8', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'default', fontSize: 13, whiteSpace: 'nowrap' },
   deleteBtn: { background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' },
   regradeBtn: { background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' },
   regradeBtnDisabled: { background: '#f8fafc', color: '#cbd5e1', border: '1px solid #e2e8f0', borderRadius: 6, padding: '5px 10px', cursor: 'not-allowed', fontSize: 12, whiteSpace: 'nowrap' },
@@ -877,7 +885,7 @@ const s = {
   },
   modalIcon: { fontSize: 40, textAlign: 'center', marginBottom: 12 },
   modalTitle: { fontSize: 20, fontWeight: 700, color: '#1e293b', textAlign: 'center', margin: '0 0 12px' },
-  modalDesc: { fontSize: 14, color: '#64748b', textAlign: 'center', margin: '0 0 20px', lineHeight: 1.6 },
+  modalDesc: { fontSize: 14, color: '#64748b', textAlign: 'center', margin: '0 0 20px', lineHeight: 1.6, wordBreak: 'keep-all' },
   modalInfoBox: { background: '#f8fafc', borderRadius: 10, padding: 16, border: '1px solid #e2e8f0', marginBottom: 20 },
   modalInfoRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' },
   modalInfoLabel: { fontSize: 13, color: '#64748b', fontWeight: 500 },

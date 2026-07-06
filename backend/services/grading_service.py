@@ -137,11 +137,12 @@ async def grade_student_problems(
         # 처리 전용 criteria 복사 (원본 수정 방지)
         working_criteria = list(problem.partial_score_criteria)
 
-        # 배점 합계 계산
+        # 배점 합계 계산 (부동소수점 오차 방지를 위해 반올림)
         criteria_sum = sum(c.score for c in working_criteria)
-        remaining_score = problem.full_score - criteria_sum
-        # 남은 배점이 있으면 AI 자율 평가 항목으로 추가 (집계에 반영되도록)
-        if remaining_score > 0:
+        remaining_score = round(problem.full_score - criteria_sum, 2)
+        # 남은 배점이 실제로 있을 때만 AI 자율 평가 항목으로 추가
+        # (0.05 미만은 0.7+0.3=0.999... 같은 부동소수점 잔차로 간주하고 무시)
+        if remaining_score >= 0.05:
             working_criteria.append(PartialScoreCriterion(
                 item="종합 코드 품질",
                 score=remaining_score

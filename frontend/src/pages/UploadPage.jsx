@@ -234,7 +234,10 @@ function RubricEditor({ rubric, onChange }) {
       {/* Problems */}
       {rubric.problems.map((problem, pIdx) => {
         const criteriaSum = getCriteriaSum(problem.partial_score_criteria);
-        const mismatch = Math.abs(criteriaSum - (parseFloat(problem.full_score) || 0)) > 0.001;
+        const fullScore = parseFloat(problem.full_score) || 0;
+        const mismatch = Math.abs(criteriaSum - fullScore) > 0.001;
+        const isUnder = mismatch && criteriaSum < fullScore;
+        const remainScore = Math.round((fullScore - criteriaSum) * 100) / 100;
 
         return (
           <div key={pIdx} style={re.problemCard}>
@@ -292,9 +295,15 @@ function RubricEditor({ rubric, onChange }) {
               <div style={re.criteriaHeader}>
                 <span style={re.smallLabel}>부분 점수 항목</span>
                 {mismatch && (
-                  <span style={re.mismatchWarn}>
-                    합계 {criteriaSum}점 (배점 {problem.full_score}점과 불일치)
-                  </span>
+                  isUnder ? (
+                    <span style={re.mismatchUnder}>
+                      합계 {criteriaSum}점 — 남은 {remainScore}점은 AI 자율 평가(종합 코드 품질)로 채점됩니다
+                    </span>
+                  ) : (
+                    <span style={re.mismatchWarn}>
+                      합계 {criteriaSum}점 (배점 {problem.full_score}점 초과!)
+                    </span>
+                  )
                 )}
               </div>
 
@@ -535,6 +544,7 @@ const re = {
   criteriaSection: { marginTop: 4 },
   criteriaHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   mismatchWarn: { fontSize: 12, color: '#dc2626', fontWeight: 600, background: '#fef2f2', padding: '2px 8px', borderRadius: 4 },
+  mismatchUnder: { fontSize: 12, color: '#b45309', fontWeight: 600, background: '#fffbeb', padding: '2px 8px', borderRadius: 4 },
   criteriaColumn: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 },
   criteriaRow: { display: 'flex', alignItems: 'center', gap: 8 },
   criteriaItemInput: {
