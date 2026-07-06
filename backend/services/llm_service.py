@@ -176,8 +176,9 @@ def _normalize_rubric_scores(rubric: Dict[str, Any]) -> Dict[str, Any]:
             continue
         scale = full / total
         acc = 0.0
+        # 소수점 첫째 자리(0.1 단위)로 반올림, 잔차는 마지막 항목에서 보정
         for c in criteria[:-1]:
-            new_score = round(float(c.get("score", 0)) * scale, 2)
+            new_score = round(float(c.get("score", 0)) * scale, 1)
             c["score"] = new_score
             acc += new_score
         criteria[-1]["score"] = max(0.0, round(full - acc, 2))

@@ -389,7 +389,8 @@ export default function HistoryPage() {
                         <th style={{ ...th, width: '140px' }}>완료 시간</th>
                         <th style={{ ...th, textAlign: 'center', width: '110px' }}>채점 AI</th>
                         <th style={{ ...th, textAlign: 'center', width: '80px' }}>결과 보기</th>
-                        <th style={{ ...th, textAlign: 'center', width: '90px' }}>관리</th>
+                        <th style={{ ...th, textAlign: 'center', width: '108px' }}>새 AI 채점</th>
+                        <th style={{ ...th, textAlign: 'center', width: '72px' }}>삭제</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -425,7 +426,7 @@ export default function HistoryPage() {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 8 }}>
                                   <span style={{ color: '#94a3b8' }}>└</span>
                                   <div>
-                                    <span style={s.regradeBadge}>🔄 재채점</span>
+                                    <span style={s.regradeBadge}>🆕 새 AI 채점</span>
                                     <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{formatDate(session.created_at)}</div>
                                   </div>
                                 </div>
@@ -487,7 +488,25 @@ export default function HistoryPage() {
                                 {session.status === 'completed' ? '보기' : '—'}
                               </button>
                             </td>
-                            <td style={{ ...td, textAlign: 'center' }}>
+                            <td style={{ ...td, padding: '14px 4px', textAlign: 'center' }}>
+                              {session.status === 'running' ? (
+                                <span style={{ color: '#cbd5e1', fontSize: 12 }}>—</span>
+                              ) : (
+                                <button
+                                  style={canRegrade ? s.regradeBtn : s.regradeBtnDisabled}
+                                  onClick={e => { e.stopPropagation(); if (canRegrade) openRegradeModal(session); }}
+                                  disabled={!canRegrade}
+                                  title={canRegrade
+                                    ? '새로운 AI 모델로 다시 채점합니다'
+                                    : (session.status !== 'completed'
+                                      ? '완료된 세션만 새 AI로 채점할 수 있습니다'
+                                      : '채점 데이터가 저장되지 않은 세션입니다 (기능 추가 이전에 채점됨)')}
+                                >
+                                  🆕 새 AI 채점
+                                </button>
+                              )}
+                            </td>
+                            <td style={{ ...td, padding: '14px 4px', textAlign: 'center' }}>
                               {session.status === 'running' ? (
                                 <button
                                   style={cancellingIds.has(session.session_id)
@@ -500,27 +519,13 @@ export default function HistoryPage() {
                                   {cancellingIds.has(session.session_id) ? '중단 중...' : '🛑 중단'}
                                 </button>
                               ) : (
-                                <div style={{ display: 'inline-flex', gap: 4 }}>
-                                  <button
-                                    style={canRegrade ? s.regradeBtn : s.regradeBtnDisabled}
-                                    onClick={e => { e.stopPropagation(); if (canRegrade) openRegradeModal(session); }}
-                                    disabled={!canRegrade}
-                                    title={canRegrade
-                                      ? '다른 AI 모델로 재채점'
-                                      : (session.status !== 'completed'
-                                        ? '완료된 세션만 재채점할 수 있습니다'
-                                        : '재채점 데이터가 없는 세션입니다 (기능 추가 이전에 채점됨)')}
-                                  >
-                                    🔄
-                                  </button>
-                                  <button
-                                    style={s.deleteBtn}
-                                    onClick={e => { e.stopPropagation(); openDeleteModal(session); }}
-                                    title="채점 기록 삭제"
-                                  >
-                                    삭제
-                                  </button>
-                                </div>
+                                <button
+                                  style={s.deleteBtn}
+                                  onClick={e => { e.stopPropagation(); openDeleteModal(session); }}
+                                  title="채점 기록 삭제"
+                                >
+                                  삭제
+                                </button>
                               )}
                             </td>
                           </tr>
@@ -673,10 +678,10 @@ export default function HistoryPage() {
       {regradeTarget && (
         <div style={s.modalOverlay} onClick={() => { if (!regrading) setRegradeTarget(null); }}>
           <div style={{ ...s.modal, maxWidth: 460 }} onClick={e => e.stopPropagation()}>
-            <div style={s.modalIcon}>🔄</div>
-            <h3 style={s.modalTitle}>다른 AI로 재채점</h3>
+            <div style={s.modalIcon}>🆕</div>
+            <h3 style={s.modalTitle}>새 AI로 채점하기</h3>
             <p style={s.modalDesc}>
-              저장된 루브릭·정답·학생 데이터로 <strong>모델만 바꿔</strong> 다시 채점합니다.<br />
+              저장된 루브릭·정답·학생 데이터로 <strong>AI 모델만 바꿔</strong> 다시 채점합니다.<br />
               기존 결과는 보존되고, 새 채점 기록이 원본 아래에 추가됩니다.
             </p>
 
@@ -696,7 +701,7 @@ export default function HistoryPage() {
             </div>
 
             <div style={{ marginBottom: 20 }}>
-              <p style={s.modalConfirmLabel}>재채점에 사용할 모델을 선택하세요:</p>
+              <p style={s.modalConfirmLabel}>새로 채점할 AI 모델을 선택하세요:</p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {availableModels.map(m => {
                   const isCurrent = m.id === regradeTarget.grading_model;
@@ -729,7 +734,7 @@ export default function HistoryPage() {
                 onClick={startRegrade}
                 disabled={!regradeModel || regrading}
               >
-                {regrading ? '재채점 시작 중...' : '🔄 재채점 시작'}
+                {regrading ? '채점 시작 중...' : '🆕 새 AI로 채점 시작'}
               </button>
             </div>
           </div>
@@ -817,9 +822,9 @@ const s = {
   table: { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' },
   viewBtn: { background: '#eff6ff', color: '#2563eb', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
   viewBtnDisabled: { background: '#f1f5f9', color: '#94a3b8', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'default', fontSize: 13 },
-  deleteBtn: { background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
-  regradeBtn: { background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
-  regradeBtnDisabled: { background: '#f8fafc', color: '#cbd5e1', border: '1px solid #e2e8f0', borderRadius: 6, padding: '5px 10px', cursor: 'not-allowed', fontSize: 13 },
+  deleteBtn: { background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' },
+  regradeBtn: { background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' },
+  regradeBtnDisabled: { background: '#f8fafc', color: '#cbd5e1', border: '1px solid #e2e8f0', borderRadius: 6, padding: '5px 10px', cursor: 'not-allowed', fontSize: 12, whiteSpace: 'nowrap' },
   regradeBadge: {
     fontSize: 11, background: '#eff6ff', color: '#2563eb',
     borderRadius: 4, padding: '2px 6px', fontWeight: 700, whiteSpace: 'nowrap',

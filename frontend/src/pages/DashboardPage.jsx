@@ -279,7 +279,7 @@ export default function DashboardPage() {
             <>
               <div style={s.infoDivider} />
               <div style={s.infoItem}>
-                <span style={s.infoLabel}>🔄 재채점</span>
+                <span style={s.infoLabel}>🆕 새 AI 채점</span>
                 <span
                   style={{ ...s.infoValue, color: '#2563eb', cursor: 'pointer', textDecoration: 'underline' }}
                   onClick={() => navigate(`/dashboard/${session.regraded_from}`)}
