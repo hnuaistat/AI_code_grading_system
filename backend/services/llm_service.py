@@ -58,6 +58,18 @@ class RubricResponse(BaseModel):
     problems: List[RubricProblemLLM]
 
 
+# Fireworks 추론 모델(kimi 등)은 thinking을 명시적으로 끄지 않으면
+# chain-of-thought가 content로 새어나와 JSON 파싱이 깨질 수 있음
+FIREWORKS_THINKING_OFF = {"thinking": {"type": "disabled"}}
+
+
+def _strip_reasoning(content: str) -> str:
+    """content에 누수된 모델 추론(<think>...</think>) 제거."""
+    if "</think>" in content:
+        content = content.rsplit("</think>", 1)[1]
+    return content.strip()
+
+
 DEFAULT_MODEL = "fireworks/accounts/fireworks/models/kimi-k2p6"
 
 # 사용 가능한 모델 목록 (provider/model_id 형식)
@@ -231,11 +243,12 @@ async def generate_rubric_with_ai(
                 "schema": RubricResponse.model_json_schema()
             }
         }
+        api_params["extra_body"] = FIREWORKS_THINKING_OFF
 
     try:
         response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
 
-        content = response.choices[0].message.content.strip()
+        content = _strip_reasoning(response.choices[0].message.content.strip())
 
         # JSON 파싱 (마크다운 코드블록 제거)
         if content.startswith("```"):
@@ -328,11 +341,12 @@ async def decompose_rubric_item_with_ai(
                 "schema": DecomposeResponse.model_json_schema()
             }
         }
+        api_params["extra_body"] = FIREWORKS_THINKING_OFF
 
     try:
         response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
 
-        content = response.choices[0].message.content.strip()
+        content = _strip_reasoning(response.choices[0].message.content.strip())
         result_data = json5.loads(content)
 
         # json_schema 모드: {"items": [...]} 형태
@@ -606,7 +620,9 @@ async def grade_with_ai(
                     "schema": GradingResponse.model_json_schema()
                 }
             }
-            # kimi/glm/qwen: reasoning_effort 미지원 → 파라미터 없이 호출
+            # kimi/glm/qwen: reasoning_effort 미지원 → thinking 파라미터로 추론 비활성화
+            # (끄지 않으면 추론 텍스트가 content로 새어나와 json_schema가 무력화됨)
+            api_params["extra_body"] = FIREWORKS_THINKING_OFF
 
         response = await _call_with_retry(lambda: client.chat.completions.create(**api_params))
 
@@ -619,8 +635,8 @@ async def grade_with_ai(
             print(f"[ERROR] 빈 응답 수신 (model={model}, problem={problem_id})")
             return [{"item": c.item, "max_score": c.score, "score": 0, "reason": "모델 빈 응답 오류"} for c in criteria], "모델이 응답을 생성하지 못했습니다", 0, True
 
-        # JSON 파싱 (마크다운 코드블록 제거)
-        content = content.strip()
+        # 추론 누수 제거 → 마크다운 코드블록 제거 → JSON 추출
+        content = _strip_reasoning(content.strip())
         print(f"[DEBUG] 응답 시작 | first 100 chars: {content[:100]!r}")
 
         if content.startswith("```"):
@@ -693,8 +709,9 @@ async def grade_with_ai(
 
         return graded, overall_feedback, tokens_used, False
 
-    except json.JSONDecodeError as e:
-        print(f"\n[PARSE ERROR] JSONDecodeError | model={model} | problem={problem_id} | error={e}")
+    except (json.JSONDecodeError, ValueError) as e:
+        # json5.loads는 json.JSONDecodeError가 아닌 ValueError를 던짐
+        print(f"\n[PARSE ERROR] {type(e).__name__} | model={model} | problem={problem_id} | error={e}")
         print(f"[CONTENT_FULL] {content!r}\n")
         return [
             {

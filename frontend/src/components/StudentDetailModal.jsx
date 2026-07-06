@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { gradingAPI } from '../services/api';
 import { useAuth } from '../App';
 
@@ -43,7 +43,7 @@ function NotebookPanel({ student }) {
               });
             })()}
 
-            <div style={nb.problemBadge}>
+            <div style={nb.problemBadge} id={`nb-problem-${problem.problem_id}`}>
               문제 {problem.problem_id}
             </div>
 
@@ -178,7 +178,16 @@ function ProblemCard({ problem, sessionId, studentFilename, canEdit, onUpdated }
     <div style={{ ...fb.problem, borderColor: headerBorderColor, borderLeftWidth: 4, borderLeftColor: headerLeftColor }}>
       <div style={{ ...fb.problemHeader, background: headerBg, borderBottomColor: headerBottomBorder }}>
         <span style={fb.problemTitle}>
-          문제 {problem.problem_id}
+          <span
+            style={fb.problemTitleLink}
+            onClick={() => {
+              const el = document.getElementById(`nb-problem-${problem.problem_id}`);
+              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+            title="클릭하면 왼쪽 노트북에서 이 문제 위치로 이동합니다"
+          >
+            문제 {problem.problem_id} <span style={fb.jumpIcon}>📓↗</span>
+          </span>
           {problem.is_revised && <span style={fb.revisedBadge}>✏️ 수정됨</span>}
           {problem.has_ai_error && <span style={fb.aiErrorBadge}>⚠️ AI 채점 오류</span>}
         </span>
@@ -311,7 +320,7 @@ function ProblemCard({ problem, sessionId, studentFilename, canEdit, onUpdated }
   );
 }
 
-function FeedbackPanel({ student, sessionId, onStudentUpdate }) {
+function FeedbackPanel({ student, sessionId, onStudentUpdate, width }) {
   const { user } = useAuth();
   const canEdit = user && (user.role === 'professor' || user.role === 'admin');
   const ratio = student.max_total_score > 0
@@ -331,7 +340,7 @@ function FeedbackPanel({ student, sessionId, onStudentUpdate }) {
   };
 
   return (
-    <div style={fb.panel}>
+    <div style={{ ...fb.panel, width }}>
       <div style={fb.panelHeader}>
         <span style={fb.panelTitle}>🤖 AI 채점 결과 {canEdit && <span style={fb.editableTag}>편집 가능</span>}</span>
         <div style={fb.scoreBox}>
@@ -365,6 +374,32 @@ export default function StudentDetailModal({ student, sessionId, onClose, onStud
   const [cellsLoading, setCellsLoading] = useState(true);
   const [cellsError, setCellsError] = useState('');
 
+  // 좌우 패널 리사이즈 (오른쪽 채점 결과 패널 너비, px)
+  const [rightWidth, setRightWidth] = useState(500);
+  const bodyRef = useRef(null);
+
+  const startResize = (e) => {
+    e.preventDefault();
+    const onMove = (ev) => {
+      if (!bodyRef.current) return;
+      const rect = bodyRef.current.getBoundingClientRect();
+      const minRight = 320;                              // 채점 결과 최소 너비
+      const maxRight = Math.max(minRight, rect.width - 360); // 노트북 최소 360px 확보
+      const w = rect.right - ev.clientX;
+      setRightWidth(Math.min(maxRight, Math.max(minRight, w)));
+    };
+    const onUp = () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   useEffect(() => {
     setCellsLoading(true);
     setCellsError('');
@@ -392,7 +427,7 @@ export default function StudentDetailModal({ student, sessionId, onClose, onStud
         </div>
 
         {/* Split body */}
-        <div style={s.body}>
+        <div style={s.body} ref={bodyRef}>
           {cellsLoading ? (
             <div style={s.notebookLoading}>노트북 로딩 중...</div>
           ) : cellsError ? (
@@ -400,11 +435,18 @@ export default function StudentDetailModal({ student, sessionId, onClose, onStud
           ) : (
             <NotebookPanel student={fullStudent} />
           )}
-          <div style={s.divider} />
+          <div
+            style={s.divider}
+            onMouseDown={startResize}
+            title="드래그하여 패널 너비 조절"
+          >
+            <div style={s.dividerGrip} />
+          </div>
           <FeedbackPanel
             student={currentStudent}
             sessionId={sessionId}
             onStudentUpdate={handleStudentUpdate}
+            width={rightWidth}
           />
         </div>
       </div>
@@ -445,7 +487,12 @@ const s = {
     display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0,
   },
   divider: {
-    width: 1, background: '#e2e8f0', flexShrink: 0,
+    width: 7, background: '#e2e8f0', flexShrink: 0,
+    cursor: 'col-resize', display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  dividerGrip: {
+    width: 3, height: 40, borderRadius: 99, background: '#94a3b8',
   },
   notebookLoading: {
     flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -583,6 +630,8 @@ const fb = {
     borderRadius: '12px 12px 0 0',
   },
   problemTitle: { fontWeight: 700, fontSize: 15, color: '#1e293b' },
+  problemTitleLink: { cursor: 'pointer', userSelect: 'none' },
+  jumpIcon: { fontSize: 11, color: '#64748b', fontWeight: 500 },
   problemScore: { fontWeight: 700, fontSize: 15 },
   problemDescription: {
     padding: '12px 16px', background: '#f0f9ff',

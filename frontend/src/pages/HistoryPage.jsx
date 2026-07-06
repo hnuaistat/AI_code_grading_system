@@ -75,9 +75,8 @@ export default function HistoryPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
 
-  // 다중 선택 삭제
+  // 다중 선택 삭제 (체크박스는 항상 표시)
   const [selectedIds, setSelectedIds] = useState(new Set());
-  const [bulkDeleteMode, setBulkDeleteMode] = useState(false);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkDeleteProgress, setBulkDeleteProgress] = useState(0);
@@ -86,6 +85,29 @@ export default function HistoryPage() {
 
   // 강제 중단 진행 중인 세션 id 집합
   const [cancellingIds, setCancellingIds] = useState(new Set());
+
+  // 세부 항목 인라인 편집
+  const [editingItemId, setEditingItemId] = useState(null);
+  const [itemDraft, setItemDraft] = useState('');
+  const [itemSaving, setItemSaving] = useState(false);
+
+  const startEditItem = (session) => {
+    setEditingItemId(session.session_id);
+    setItemDraft(session.subject_item_name || '');
+  };
+
+  const saveItem = async (session) => {
+    setItemSaving(true);
+    try {
+      await gradingAPI.updateSessionItem(session.session_id, itemDraft.trim());
+      setEditingItemId(null);
+      reloadHistory();
+    } catch (e) {
+      alert(e.response?.data?.detail || '세부 항목 저장에 실패했습니다');
+    } finally {
+      setItemSaving(false);
+    }
+  };
 
   const handleCancel = async (session) => {
     if (!window.confirm(`'${session.subject_item_name || session.subject_name || session.session_id.slice(0, 8)}' 채점을 강제 중단하시겠습니까?\n지금까지 채점된 결과는 보존됩니다.`)) return;
@@ -175,8 +197,7 @@ export default function HistoryPage() {
     });
   };
 
-  const exitBulkMode = () => {
-    setBulkDeleteMode(false);
+  const clearSelection = () => {
     setSelectedIds(new Set());
   };
 
@@ -199,7 +220,6 @@ export default function HistoryPage() {
     setBulkDeleting(false);
     setShowBulkModal(false);
     setSelectedIds(new Set());
-    setBulkDeleteMode(false);
     if (failed > 0) setBulkDeleteError(`${failed}개 삭제 실패`);
     reloadHistory();
   };
@@ -257,22 +277,18 @@ export default function HistoryPage() {
               <option key={sub} value={sub}>{sub}</option>
             ))}
           </select>
-          {!bulkDeleteMode ? (
-            <button style={s.bulkModeBtn} onClick={() => setBulkDeleteMode(true)}>
-              ☑️ 선택 삭제
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              style={selectedCount > 0 ? s.bulkDeleteBtn : s.bulkDeleteBtnDisabled}
+              disabled={selectedCount === 0}
+              onClick={() => { setBulkDeleteError(''); setBulkConfirmText(''); setShowBulkModal(true); }}
+            >
+              🗑 {selectedCount > 0 ? `${selectedCount}개 삭제` : '선택 삭제'}
             </button>
-          ) : (
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                style={selectedCount > 0 ? s.bulkDeleteBtn : s.bulkDeleteBtnDisabled}
-                disabled={selectedCount === 0}
-                onClick={() => { setBulkDeleteError(''); setBulkConfirmText(''); setShowBulkModal(true); }}
-              >
-                🗑 {selectedCount}개 삭제
-              </button>
-              <button style={s.bulkCancelBtn} onClick={exitBulkMode}>취소</button>
-            </div>
-          )}
+            {selectedCount > 0 && (
+              <button style={s.bulkCancelBtn} onClick={clearSelection}>선택 해제</button>
+            )}
+          </div>
         </div>
 
         {bulkDeleteError && (
@@ -298,7 +314,7 @@ export default function HistoryPage() {
                 <div style={s.subjectHeader}>
                   <span style={s.subjectName}>{subjectName}</span>
                   <span style={s.sessionCount}>{sessions.length}회 채점</span>
-                  {bulkDeleteMode && deletableSessions.length > 0 && (
+                  {deletableSessions.length > 0 && (
                     <button style={s.selectAllBtn} onClick={() => toggleSelectAll(sessions)}>
                       {allSelected ? '전체 해제' : '전체 선택'}
                     </button>
@@ -309,15 +325,16 @@ export default function HistoryPage() {
                   <table style={s.table}>
                     <thead>
                       <tr style={{ background: '#f8fafc' }}>
-                        {bulkDeleteMode && <th style={{ ...th, width: '44px', textAlign: 'center' }}>
+                        <th style={{ ...th, width: '44px', textAlign: 'center' }}>
                           <input
                             type="checkbox"
                             checked={allSelected}
                             ref={el => { if (el) el.indeterminate = someSelected && !allSelected; }}
                             onChange={() => toggleSelectAll(sessions)}
+                            disabled={deletableSessions.length === 0}
                             style={{ cursor: 'pointer', width: 15, height: 15 }}
                           />
-                        </th>}
+                        </th>
                         <th style={{ ...th, width: '140px' }}>날짜</th>
                         <th style={{ ...th, width: '90px' }}>상태</th>
                         <th style={{ ...th, width: '120px' }}>세부 항목</th>
@@ -325,7 +342,7 @@ export default function HistoryPage() {
                         <th style={{ ...th, width: '140px' }}>완료 시간</th>
                         <th style={{ ...th, textAlign: 'center', width: '110px' }}>채점 AI</th>
                         <th style={{ ...th, textAlign: 'center', width: '80px' }}>결과 보기</th>
-                        {!bulkDeleteMode && <th style={{ ...th, textAlign: 'center', width: '90px' }}>관리</th>}
+                        <th style={{ ...th, textAlign: 'center', width: '90px' }}>관리</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -338,34 +355,54 @@ export default function HistoryPage() {
                             style={{
                               borderBottom: '1px solid #f1f5f9',
                               background: isChecked ? '#fef2f2' : 'transparent',
-                              cursor: bulkDeleteMode && isDeletable ? 'pointer' : 'default',
+                              cursor: isDeletable ? 'pointer' : 'default',
                             }}
-                            onClick={() => { if (bulkDeleteMode && isDeletable) toggleSelect(session.session_id); }}
+                            onClick={() => { if (isDeletable) toggleSelect(session.session_id); }}
                           >
-                            {bulkDeleteMode && (
-                              <td style={{ ...td, textAlign: 'center' }}>
-                                {isDeletable ? (
-                                  <input
-                                    type="checkbox"
-                                    checked={isChecked}
-                                    onChange={() => toggleSelect(session.session_id)}
-                                    onClick={e => e.stopPropagation()}
-                                    style={{ cursor: 'pointer', width: 15, height: 15 }}
-                                  />
-                                ) : (
-                                  <span style={{ color: '#cbd5e1', fontSize: 12 }}>—</span>
-                                )}
-                              </td>
-                            )}
+                            <td style={{ ...td, textAlign: 'center' }}>
+                              {isDeletable ? (
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleSelect(session.session_id)}
+                                  onClick={e => e.stopPropagation()}
+                                  style={{ cursor: 'pointer', width: 15, height: 15 }}
+                                />
+                              ) : (
+                                <span style={{ color: '#cbd5e1', fontSize: 12 }}>—</span>
+                              )}
+                            </td>
                             <td style={td}>{formatDate(session.created_at)}</td>
                             <td style={td}><StatusBadge status={session.status} /></td>
-                            <td style={td}>
-                              {session.subject_item_name ? (
-                                <span style={{ background: '#f0fdf4', color: '#16a34a', borderRadius: 4, padding: '2px 8px', fontSize: 12, fontWeight: 500 }}>
-                                  {session.subject_item_name}
-                                </span>
+                            <td style={td} onClick={e => e.stopPropagation()}>
+                              {editingItemId === session.session_id ? (
+                                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                  <input
+                                    value={itemDraft}
+                                    onChange={e => setItemDraft(e.target.value)}
+                                    onKeyDown={e => {
+                                      if (e.key === 'Enter') saveItem(session);
+                                      if (e.key === 'Escape') setEditingItemId(null);
+                                    }}
+                                    placeholder="예: 중간고사"
+                                    autoFocus
+                                    disabled={itemSaving}
+                                    style={s.itemInput}
+                                  />
+                                  <button style={s.itemSaveBtn} onClick={() => saveItem(session)} disabled={itemSaving} title="저장 (Enter)">✓</button>
+                                  <button style={s.itemCancelBtn} onClick={() => setEditingItemId(null)} disabled={itemSaving} title="취소 (Esc)">✕</button>
+                                </div>
                               ) : (
-                                <span style={{ color: '#94a3b8', fontSize: 13 }}>—</span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                  {session.subject_item_name ? (
+                                    <span style={{ background: '#f0fdf4', color: '#16a34a', borderRadius: 4, padding: '2px 8px', fontSize: 12, fontWeight: 500 }}>
+                                      {session.subject_item_name}
+                                    </span>
+                                  ) : (
+                                    <span style={{ color: '#94a3b8', fontSize: 13 }}>—</span>
+                                  )}
+                                  <button style={s.itemEditBtn} onClick={() => startEditItem(session)} title="세부 항목 추가/수정">✏️</button>
+                                </span>
                               )}
                             </td>
                             <td style={{ ...td, textAlign: 'center' }}>
@@ -390,30 +427,28 @@ export default function HistoryPage() {
                                 {session.status === 'completed' ? '보기' : '—'}
                               </button>
                             </td>
-                            {!bulkDeleteMode && (
-                              <td style={{ ...td, textAlign: 'center' }}>
-                                {session.status === 'running' ? (
-                                  <button
-                                    style={cancellingIds.has(session.session_id)
-                                      ? { ...s.cancelBtn, opacity: 0.6, cursor: 'wait' }
-                                      : s.cancelBtn}
-                                    onClick={e => { e.stopPropagation(); handleCancel(session); }}
-                                    disabled={cancellingIds.has(session.session_id)}
-                                    title="채점을 강제로 중단합니다 (지금까지 결과는 보존)"
-                                  >
-                                    {cancellingIds.has(session.session_id) ? '중단 중...' : '🛑 중단'}
-                                  </button>
-                                ) : (
-                                  <button
-                                    style={s.deleteBtn}
-                                    onClick={e => { e.stopPropagation(); openDeleteModal(session); }}
-                                    title="채점 기록 삭제"
-                                  >
-                                    삭제
-                                  </button>
-                                )}
-                              </td>
-                            )}
+                            <td style={{ ...td, textAlign: 'center' }}>
+                              {session.status === 'running' ? (
+                                <button
+                                  style={cancellingIds.has(session.session_id)
+                                    ? { ...s.cancelBtn, opacity: 0.6, cursor: 'wait' }
+                                    : s.cancelBtn}
+                                  onClick={e => { e.stopPropagation(); handleCancel(session); }}
+                                  disabled={cancellingIds.has(session.session_id)}
+                                  title="채점을 강제로 중단합니다 (지금까지 결과는 보존)"
+                                >
+                                  {cancellingIds.has(session.session_id) ? '중단 중...' : '🛑 중단'}
+                                </button>
+                              ) : (
+                                <button
+                                  style={s.deleteBtn}
+                                  onClick={e => { e.stopPropagation(); openDeleteModal(session); }}
+                                  title="채점 기록 삭제"
+                                >
+                                  삭제
+                                </button>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
@@ -587,11 +622,6 @@ const s = {
   filterBar: { display: 'flex', gap: 12, marginBottom: 28, alignItems: 'center' },
   search: { flex: 1, padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none' },
   select: { padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none', background: '#fff', cursor: 'pointer' },
-  bulkModeBtn: {
-    background: '#fff', border: '1.5px solid #e2e8f0', borderRadius: 8,
-    padding: '10px 16px', fontSize: 14, cursor: 'pointer', color: '#374151',
-    fontWeight: 500, whiteSpace: 'nowrap',
-  },
   bulkDeleteBtn: {
     background: '#dc2626', color: '#fff', border: 'none', borderRadius: 8,
     padding: '10px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
@@ -630,6 +660,22 @@ const s = {
   subjectHeader: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 },
   subjectName: { fontSize: 17, fontWeight: 700, color: '#1e293b' },
   sessionCount: { fontSize: 13, color: '#94a3b8', background: '#f1f5f9', borderRadius: 20, padding: '2px 10px' },
+  itemInput: {
+    width: 90, padding: '4px 6px', border: '1.5px solid #cbd5e1',
+    borderRadius: 6, fontSize: 12, outline: 'none',
+  },
+  itemSaveBtn: {
+    background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0',
+    borderRadius: 4, padding: '2px 6px', fontSize: 12, cursor: 'pointer', fontWeight: 700,
+  },
+  itemCancelBtn: {
+    background: '#fff', color: '#64748b', border: '1px solid #e2e8f0',
+    borderRadius: 4, padding: '2px 6px', fontSize: 12, cursor: 'pointer',
+  },
+  itemEditBtn: {
+    background: 'none', border: 'none', cursor: 'pointer',
+    fontSize: 12, padding: 0, opacity: 0.55,
+  },
   selectAllBtn: {
     background: 'none', border: '1px solid #e2e8f0', borderRadius: 6,
     padding: '3px 10px', fontSize: 12, cursor: 'pointer', color: '#64748b', fontWeight: 500,

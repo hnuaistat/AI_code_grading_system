@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
 import { gradingAPI } from '../services/api';
@@ -26,6 +26,27 @@ export default function DashboardPage() {
   // 강제 중단
   const [cancelling, setCancelling] = useState(false);
 
+  // 예상 남은 시간 계산 기준점 (대시보드 진입 이후 관측된 처리량 기반)
+  const etaBaseRef = useRef(null);
+
+  // 세부 항목 인라인 편집
+  const [itemEditing, setItemEditing] = useState(false);
+  const [itemDraft, setItemDraft] = useState('');
+  const [itemSaving, setItemSaving] = useState(false);
+
+  const saveSubjectItem = async () => {
+    setItemSaving(true);
+    try {
+      await gradingAPI.updateSessionItem(sessionId, itemDraft.trim());
+      setItemEditing(false);
+      await fetchSession();
+    } catch (err) {
+      setError(err.response?.data?.detail || '세부 항목 저장에 실패했습니다');
+    } finally {
+      setItemSaving(false);
+    }
+  };
+
   const fetchSession = useCallback(async () => {
     try {
       const res = await gradingAPI.getSession(sessionId);
@@ -48,6 +69,16 @@ export default function DashboardPage() {
     const interval = setInterval(fetchSession, 2000);
     return () => clearInterval(interval);
   }, [session?.status, fetchSession]);
+
+  // 채점 시작을 관측한 시점의 (시각, 처리 인원)을 기준점으로 저장
+  useEffect(() => {
+    if (!session) return;
+    const running = session.status === 'running' || session.status === 'pending';
+    if (!running) { etaBaseRef.current = null; return; }
+    if (!etaBaseRef.current || etaBaseRef.current.sessionId !== sessionId) {
+      etaBaseRef.current = { sessionId, t0: Date.now(), p0: session.processed_students };
+    }
+  }, [session, sessionId]);
 
   const handleCancel = async () => {
     if (!window.confirm('채점을 강제 중단하시겠습니까?\n지금까지 채점된 결과는 보존되지만, 진행 중이던 학생의 결과는 저장되지 않을 수 있습니다.')) return;
@@ -134,6 +165,25 @@ export default function DashboardPage() {
 
   const isRunning = session.status === 'running' || session.status === 'pending';
   const isDone = session.status === 'completed';
+
+  // 예상 남은 시간 (관측된 학생당 처리 시간 × 남은 인원, ±여유를 둔 범위로 표시)
+  const etaText = (() => {
+    if (!isRunning) return null;
+    const base = etaBaseRef.current;
+    const left = session.total_students - session.processed_students;
+    if (left <= 0) return null;
+    if (!base || base.sessionId !== sessionId) return '예상 시간 계산 중...';
+    const done = session.processed_students - base.p0;
+    if (done < 1) return '예상 시간 계산 중...';
+    const perMs = (Date.now() - base.t0) / done;
+    const remainMs = perMs * left;
+    const lowMin = Math.floor((remainMs * 0.9) / 60000);
+    const highMin = Math.ceil((remainMs * 1.25) / 60000);
+    if (highMin <= 1) return '약 1분 이내 남았습니다';
+    if (lowMin < 1) return `약 ${highMin}분 이내 남았습니다`;
+    if (lowMin === highMin) return `약 ${highMin}분 남았습니다`;
+    return `약 ${lowMin}~${highMin}분 남았습니다`;
+  })();
   const isQuotaExceeded = session.status === 'quota_exceeded';
   const isCancelled = session.status === 'cancelled';
 
@@ -169,7 +219,35 @@ export default function DashboardPage() {
           <div style={s.infoDivider} />
           <div style={s.infoItem}>
             <span style={s.infoLabel}>📋 세부 항목</span>
-            <span style={s.infoValue}>{session.subject_item_name || '—'}</span>
+            {itemEditing ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <input
+                  value={itemDraft}
+                  onChange={e => setItemDraft(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') saveSubjectItem();
+                    if (e.key === 'Escape') setItemEditing(false);
+                  }}
+                  placeholder="예: 중간고사"
+                  autoFocus
+                  disabled={itemSaving}
+                  style={s.itemInput}
+                />
+                <button style={s.itemSaveBtn} onClick={saveSubjectItem} disabled={itemSaving} title="저장 (Enter)">✓</button>
+                <button style={s.itemCancelBtn} onClick={() => setItemEditing(false)} disabled={itemSaving} title="취소 (Esc)">✕</button>
+              </span>
+            ) : (
+              <span style={s.infoValue}>
+                {session.subject_item_name || '—'}
+                <button
+                  style={s.itemEditBtn}
+                  onClick={() => { setItemDraft(session.subject_item_name || ''); setItemEditing(true); }}
+                  title="세부 항목 추가/수정"
+                >
+                  ✏️
+                </button>
+              </span>
+            )}
           </div>
           <div style={s.infoDivider} />
           <div style={s.infoItem}>
@@ -222,6 +300,7 @@ export default function DashboardPage() {
             <div style={s.progressBar}>
               <div style={{ ...s.progressFill, width: `${session.progress}%` }} />
             </div>
+            {etaText && <div style={s.etaText}>⏳ {etaText}</div>}
           </div>
         )}
 
@@ -372,10 +451,10 @@ function StatCard({ label, value, unit, color }) {
 }
 
 const sc = {
-  card: { background:'#fff', borderRadius:12, padding:'20px 24px', flex:1, boxShadow:'0 1px 6px rgba(0,0,0,0.06)' },
-  value: { fontSize:28, fontWeight:700, color:'#1e293b' },
-  unit: { fontSize:13, color:'#64748b', marginBottom:6 },
-  label: { fontSize:14, color:'#94a3b8' }
+  card: { background:'#fff', borderRadius:10, padding:'10px 18px', flex:1, boxShadow:'0 1px 6px rgba(0,0,0,0.06)', display:'flex', alignItems:'baseline', gap:8, flexWrap:'wrap' },
+  value: { fontSize:20, fontWeight:700, color:'#1e293b' },
+  unit: { fontSize:11, color:'#64748b' },
+  label: { fontSize:12, color:'#94a3b8', width:'100%' }
 };
 
 const qp = {
@@ -429,18 +508,34 @@ const s = {
   headerRight: { display:'flex', alignItems:'center', gap:16 },
   userName: { fontSize:14, color:'#64748b' },
   logoutBtn: { background:'none', border:'1px solid #e2e8f0', borderRadius:6, padding:'6px 14px', cursor:'pointer', fontSize:14, color:'#64748b' },
-  main: { maxWidth:1100, margin:'0 auto', padding:'32px 24px' },
+  main: { maxWidth:1100, margin:'0 auto', padding:'16px 24px 24px' },
   infoBanner: {
-    background: '#fff', borderRadius: 12, padding: '16px 24px',
-    marginBottom: 20, boxShadow: '0 1px 6px rgba(0,0,0,0.06)',
+    background: '#fff', borderRadius: 10, padding: '8px 16px',
+    marginBottom: 12, boxShadow: '0 1px 6px rgba(0,0,0,0.06)',
     display: 'flex', alignItems: 'center', gap: 0, flexWrap: 'wrap',
   },
-  infoItem: { display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 20px' },
+  infoItem: { display: 'flex', flexDirection: 'column', gap: 2, padding: '2px 14px' },
   infoLabel: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 },
   infoValue: { fontSize: 14, fontWeight: 600, color: '#1e293b', display: 'flex', alignItems: 'center', gap: 6 },
   infoCode: { fontSize: 11, background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700 },
-  infoDivider: { width: 1, height: 36, background: '#e2e8f0', margin: '0 4px' },
-  progressCard: { background:'#fff', borderRadius:12, padding:'20px 24px', marginBottom:24, boxShadow:'0 1px 6px rgba(0,0,0,0.06)' },
+  itemInput: {
+    width: 110, padding: '3px 6px', border: '1.5px solid #cbd5e1',
+    borderRadius: 6, fontSize: 13, outline: 'none',
+  },
+  itemSaveBtn: {
+    background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0',
+    borderRadius: 4, padding: '2px 6px', fontSize: 12, cursor: 'pointer', fontWeight: 700,
+  },
+  itemCancelBtn: {
+    background: '#fff', color: '#64748b', border: '1px solid #e2e8f0',
+    borderRadius: 4, padding: '2px 6px', fontSize: 12, cursor: 'pointer',
+  },
+  itemEditBtn: {
+    background: 'none', border: 'none', cursor: 'pointer',
+    fontSize: 12, padding: 0, opacity: 0.55,
+  },
+  infoDivider: { width: 1, height: 28, background: '#e2e8f0', margin: '0 4px' },
+  progressCard: { background:'#fff', borderRadius:12, padding:'16px 20px', marginBottom:12, boxShadow:'0 1px 6px rgba(0,0,0,0.06)' },
   progressTop: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 },
   cancelBtn: {
     background: '#fef2f2', color: '#dc2626', border: '1.5px solid #fecaca',
@@ -456,19 +551,20 @@ const s = {
   cancelledTitle: { fontSize: 15, fontWeight: 700, color: '#92400e', marginBottom: 4 },
   cancelledDesc: { fontSize: 13, color: '#78350f', lineHeight: 1.5 },
   progressLabel: { fontSize:14, color:'#374151', fontWeight:500 },
+  etaText: { marginTop:10, fontSize:13, color:'#2563eb', fontWeight:600 },
   progressPct: { fontSize:14, fontWeight:700, color:'#2563eb' },
   progressBar: { height:10, background:'#e2e8f0', borderRadius:99, overflow:'hidden' },
   progressFill: { height:'100%', background:'linear-gradient(90deg,#2563eb,#60a5fa)', borderRadius:99, transition:'width 0.5s ease' },
-  statsRow: { display:'grid', gridTemplateColumns:'repeat(4,1fr) auto', gap:16, marginBottom:24, alignItems:'stretch' },
+  statsRow: { display:'grid', gridTemplateColumns:'repeat(4,1fr) auto', gap:12, marginBottom:12, alignItems:'stretch' },
   statsBtn: {
     background:'#7c3aed', color:'#fff', border:'none', borderRadius:12,
     padding:'0 20px', fontSize:14, fontWeight:600, cursor:'pointer',
     whiteSpace:'nowrap', boxShadow:'0 1px 6px rgba(124,58,237,0.3)'
   },
   error: { background:'#fef2f2', border:'1px solid #fecaca', color:'#dc2626', borderRadius:8, padding:'12px 16px', marginBottom:16 },
-  tableCard: { background:'#fff', borderRadius:16, padding:28, boxShadow:'0 1px 8px rgba(0,0,0,0.07)' },
-  tableHeader: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 },
-  tableTitle: { fontSize:18, fontWeight:700, color:'#1e293b' },
-  dlBtn: { background:'#2563eb', color:'#fff', border:'none', borderRadius:8, padding:'10px 20px', fontSize:14, fontWeight:600, cursor:'pointer' },
+  tableCard: { background:'#fff', borderRadius:16, padding:'16px 20px', boxShadow:'0 1px 8px rgba(0,0,0,0.07)' },
+  tableHeader: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 },
+  tableTitle: { fontSize:17, fontWeight:700, color:'#1e293b' },
+  dlBtn: { background:'#2563eb', color:'#fff', border:'none', borderRadius:8, padding:'8px 18px', fontSize:14, fontWeight:600, cursor:'pointer' },
   empty: { textAlign:'center', color:'#94a3b8', padding:'40px 0', fontSize:15 }
 };

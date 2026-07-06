@@ -55,6 +55,11 @@ class SubjectItemUpdate(BaseModel):
     name: str
 
 
+class SessionSubjectItemUpdate(BaseModel):
+    """채점 완료된 세션의 세부 항목 변경 (이름으로 찾거나 없으면 생성, 빈 문자열이면 해제)"""
+    subject_item_name: str = ""
+
+
 class HistorySessionItem(BaseModel):
     session_id: str
     subject_id: Optional[int] = None

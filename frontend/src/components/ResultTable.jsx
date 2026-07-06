@@ -16,6 +16,17 @@ export default function ResultTable({ results, onSelectStudent }) {
     }
   });
 
+  // 정렬 값 추출: 'problem:Q1' 형태면 해당 문항 점수, 아니면 학생 속성
+  const getSortValue = (r, field) => {
+    if (field.startsWith('problem:')) {
+      const pid = field.slice('problem:'.length);
+      const p = r.problems.find(p => String(p.problem_id) === pid);
+      return p ? p.obtained_score : -1;
+    }
+    const v = r[field];
+    return typeof v === 'string' ? v.toLowerCase() : (v ?? '');
+  };
+
   const sorted = [...results]
     .filter(r => {
       const searchTerm = search.toLowerCase();
@@ -24,10 +35,12 @@ export default function ResultTable({ results, onSelectStudent }) {
              r.filename.toLowerCase().includes(searchTerm);
     })
     .sort((a, b) => {
-      let av = a[sortField], bv = b[sortField];
-      if (typeof av === 'string') av = av.toLowerCase();
-      if (typeof bv === 'string') bv = bv.toLowerCase();
-      return sortDir === 'asc' ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1);
+      const av = getSortValue(a, sortField);
+      const bv = getSortValue(b, sortField);
+      let cmp;
+      if (typeof av === 'number' && typeof bv === 'number') cmp = av - bv;
+      else cmp = String(av).localeCompare(String(bv), 'ko');
+      return sortDir === 'asc' ? cmp : -cmp;
     });
 
   const allProblemIds = [...new Set(results.flatMap(r => r.problems.map(p => p.problem_id)))].sort();
@@ -64,19 +77,25 @@ export default function ResultTable({ results, onSelectStudent }) {
         </div>
       </div>
       {/* 고정 높이 스크롤 영역: 학번/이름 열 고정, 헤더 고정, 상하좌우 스크롤 */}
-      <div style={{ overflow: 'auto', height: 'calc(100vh - 320px)', minHeight: 150, maxHeight: '90vh', border: '1px solid #e2e8f0', borderRadius: 8, resize: 'vertical' }}>
+      <div style={{ overflow: 'auto', height: 'calc(100vh - 250px)', minHeight: 150, maxHeight: '90vh', border: '1px solid #e2e8f0', borderRadius: 8, resize: 'vertical' }}>
         <table style={s.table}>
           <thead>
             <tr style={{ background: '#f8fafc' }}>
               <Th label="학번" field="student_id" isFirst />
-              <th style={{ ...th, ...thSticky, position: 'sticky', left: 100, top: 0, zIndex: 11, minWidth: 100 }}>이름</th>
-              <th style={{ ...th, position: 'sticky', top: 0, background: '#f8fafc', zIndex: 5 }}>상세</th>
+              <th
+                style={{ ...th, ...thSticky, position: 'sticky', left: 100, top: 0, zIndex: 11, minWidth: 100 }}
+                onClick={() => toggleSort('student_name')}
+                role="button"
+              >
+                이름 {sortField === 'student_name' ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+              </th>
+              <th style={{ ...th, position: 'sticky', top: 0, background: '#f8fafc', zIndex: 5, cursor: 'default' }}>상세</th>
               {allProblemIds.map(pid => {
                 const problem = results.flatMap(r => r.problems).find(p => p.problem_id === pid);
                 const maxScore = problem ? problem.full_score : 0;
                 const pidStr = String(pid).startsWith('Q') ? pid : `Q${pid}`;
                 return (
-                  <th key={pid} style={{ ...th, position: 'sticky', top: 0, background: '#f8fafc', zIndex: 5 }}>{pidStr} ({maxScore}점)</th>
+                  <Th key={pid} label={`${pidStr} (${maxScore}점)`} field={`problem:${pid}`} />
                 );
               })}
               <Th label="총점" field="total_score" />

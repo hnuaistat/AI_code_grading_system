@@ -29,7 +29,7 @@ from schemas import (
     Token, LoginRequest, RegisterRequest, GradingCriteria, GradingSession,
     StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem, SubjectItemCreate,
     ProblemRevisionRequest, RevisionLogItem, SubjectUpdate, SubjectItemUpdate,
-    DecomposeRequest
+    DecomposeRequest, SessionSubjectItemUpdate
 )
 from services.notebook_service import (
     extract_notebooks_from_zip, parse_student_id_from_filename,
@@ -934,6 +934,45 @@ async def get_history(
             "completed_at": _to_kst(r.completed_at) if r.completed_at else None,
         })
     return result
+
+
+@app.patch("/grading/session/{session_id}/subject-item")
+async def update_session_subject_item(
+    session_id: str,
+    body: SessionSubjectItemUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """채점 완료된 세션의 세부 항목을 추가/수정한다.
+    이름이 같은 항목이 과목에 이미 있으면 재사용, 없으면 새로 생성. 빈 문자열이면 해제."""
+    record = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.id == session_id,
+        models.GradingSessionDB.user_id == current_user["id"]
+    ).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    name = body.subject_item_name.strip()
+    if not name:
+        record.subject_item_id = None
+        db.commit()
+        return {"subject_item_id": None, "subject_item_name": None}
+
+    if not record.subject_id:
+        raise HTTPException(status_code=400, detail="과목이 지정되지 않은 세션은 세부 항목을 설정할 수 없습니다")
+
+    item = db.query(models.SubjectItem).filter(
+        models.SubjectItem.subject_id == record.subject_id,
+        models.SubjectItem.name == name
+    ).first()
+    if not item:
+        item = models.SubjectItem(subject_id=record.subject_id, name=name)
+        db.add(item)
+        db.flush()
+
+    record.subject_item_id = item.id
+    db.commit()
+    return {"subject_item_id": item.id, "subject_item_name": item.name}
 
 
 @app.get("/grading/session/{session_id}/results")

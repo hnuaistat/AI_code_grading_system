@@ -6,9 +6,14 @@
 
 | 라벨 | 모델 ID | 특징 | 추론 제어 |
 |------|---------|------|-----------|
-| kimi-k2.6 | `fireworks/accounts/fireworks/models/kimi-k2p6` | 코딩·에이전트 특화, multimodal | 파라미터 없음 (미지원) |
-| glm-5.1 | `fireworks/accounts/fireworks/models/glm-5p1` | 754B MoE, 코딩 강점, 비쌈 | 파라미터 없음 (미지원) |
-| qwen3.6-plus | `fireworks/accounts/fireworks/models/qwen3p6-plus` | Alibaba 플래그십, 한국어 강점 | 파라미터 없음 (미지원) |
+| kimi-k2.6 | `fireworks/accounts/fireworks/models/kimi-k2p6` | 코딩·에이전트 특화, multimodal | `thinking: {"type": "disabled"}` (2026-07-06 적용) |
+| glm-5.1 | `fireworks/accounts/fireworks/models/glm-5p1` | 754B MoE, 코딩 강점, 비쌈 | `thinking: {"type": "disabled"}` (2026-07-06 적용) |
+| qwen3.6-plus | `fireworks/accounts/fireworks/models/qwen3p6-plus` | Alibaba 플래그십, 한국어 강점 | `thinking: {"type": "disabled"}` (2026-07-06 적용) |
+
+> **2026-07-06 변경**: Fireworks 호출 전체에 `extra_body={"thinking": {"type": "disabled"}}` 적용.
+> kimi-k2.6은 thinking을 끄지 않으면 추론 텍스트가 content로 새어나와 json_schema가 무력화됨
+> (`reasoning_effort`는 kimi/glm/qwen 미지원 → `thinking` 파라미터 사용).
+> 추가 방어: 파싱 전 `</think>` 이후 텍스트만 사용 (`_strip_reasoning`).
 
 ---
 
