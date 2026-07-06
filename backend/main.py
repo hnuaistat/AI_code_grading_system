@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import uuid
 import asyncio
@@ -29,13 +30,13 @@ from schemas import (
     Token, LoginRequest, RegisterRequest, GradingCriteria, GradingSession,
     StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem, SubjectItemCreate,
     ProblemRevisionRequest, RevisionLogItem, SubjectUpdate, SubjectItemUpdate,
-    DecomposeRequest, SessionSubjectItemUpdate
+    DecomposeRequest, SessionSubjectItemUpdate, RegradeRequest
 )
 from services.notebook_service import (
     extract_notebooks_from_zip, parse_student_id_from_filename,
     parse_notebook, split_notebook_by_problems
 )
-from services.grading_service import grade_student_notebook
+from services.grading_service import grade_student_notebook, grade_student_problems
 from services.llm_service import APIQuotaError, generate_rubric_with_ai, decompose_rubric_item_with_ai
 
 app = FastAPI(title="Jupyter Notebook 자동 채점 시스템", version="2.0.0")
@@ -123,6 +124,9 @@ def _migrate_add_columns():
     inspector = inspect(engine)
     migrations = [
         ("grading_sessions_db", "grading_model", "VARCHAR(200)"),
+        ("grading_sessions_db", "criteria_json", "TEXT"),
+        ("grading_sessions_db", "answer_problems_json", "TEXT"),
+        ("grading_sessions_db", "regraded_from", "VARCHAR(36)"),
     ]
     with engine.begin() as conn:
         for table_name, col_name, col_type in migrations:
@@ -503,6 +507,17 @@ async def start_grading(
     if not grading_model or grading_model not in valid_model_ids:
         grading_model = DEFAULT_MODEL
 
+    # 재채점용 입력 저장: 루브릭 원본 + 문항별 정답 데이터 (이미지 제외, 텍스트만)
+    answer_problems_json = None
+    try:
+        answer_nb = parse_notebook(answer_bytes)
+        answer_problems_data = split_notebook_by_problems(answer_nb)
+        answer_problems_json = json.dumps(
+            _strip_problem_images(answer_problems_data), ensure_ascii=False, default=str
+        )
+    except Exception as e:
+        print(f"[WARNING] 정답 데이터 저장 실패 (재채점 불가 세션): {e}")
+
     # Persist initial record to DB
     db_record = models.GradingSessionDB(
         id=session_id,
@@ -513,6 +528,8 @@ async def start_grading(
         total_students=len(student_notebooks),
         processed_students=0,
         grading_model=grading_model,
+        criteria_json=json.dumps(criteria_data, ensure_ascii=False),
+        answer_problems_json=answer_problems_json,
     )
     db.add(db_record)
     db.commit()
@@ -556,6 +573,98 @@ def _dump_strip_images(r: dict) -> dict:
             for out in cell.get("outputs", []):
                 out["image"] = None
     return r
+
+
+def _strip_problem_images(problems: dict) -> dict:
+    """재채점용 정답 데이터 저장 시 셀 출력에서 이미지 제거 (텍스트만 보존)"""
+    stripped = {}
+    for pid, info in problems.items():
+        cells = []
+        for c in info.get("cells", []):
+            cell = dict(c)
+            outputs = []
+            for o in cell.get("outputs", []) or []:
+                out = dict(o)
+                if isinstance(out.get("data"), dict):
+                    out["data"] = {"text/plain": out["data"].get("text/plain", "")}
+                outputs.append(out)
+            cell["outputs"] = outputs
+            cells.append(cell)
+        stripped[pid] = {"description": info.get("description", ""), "cells": cells}
+    return stripped
+
+
+def _pid_num(pid) -> int:
+    """'Q1', '문제1' 등에서 문제 번호 추출"""
+    if isinstance(pid, int):
+        return pid
+    digits = re.sub(r"\D", "", str(pid))
+    return int(digits) if digits else 0
+
+
+def _nbcell_to_raw(c: dict) -> dict:
+    """results_json에 저장된 NotebookCell을 채점 파이프라인의 원본 셀 형태로 복원"""
+    if c.get("cell_type") == "markdown":
+        return {
+            "cell_type": "markdown",
+            "source": c.get("source", ""),
+            "outputs": [],
+            "is_student_answer": c.get("is_student_answer", False),
+        }
+    outputs = []
+    for o in c.get("outputs", []) or []:
+        otype = o.get("output_type", "")
+        text = o.get("text") or ""
+        if otype == "stream":
+            outputs.append({"output_type": "stream", "text": text})
+        elif otype in ("execute_result", "display_data"):
+            outputs.append({"output_type": otype, "data": {"text/plain": text}})
+        elif otype == "error":
+            # 저장 형태: "ename: evalue\n(traceback)" → 첫 줄에서 복원
+            first_line = text.split("\n", 1)[0]
+            ename, _, evalue = first_line.partition(": ")
+            outputs.append({"output_type": "error", "ename": ename, "evalue": evalue, "traceback": []})
+    return {"cell_type": "code", "source": c.get("source", ""), "outputs": outputs}
+
+
+def _reconstruct_student_problems(student: dict) -> dict:
+    """results_json의 학생 결과에서 문항별 셀 데이터를 복원 (재채점 입력용)"""
+    problems = {}
+    for p in student.get("problems", []):
+        cells = [_nbcell_to_raw(c) for c in (p.get("code_cells") or [])]
+        problems[_pid_num(p.get("problem_id"))] = {
+            "description": p.get("problem_description", ""),
+            "cells": cells,
+        }
+        preamble = p.get("preamble_cells") or []
+        if preamble and 0 not in problems:
+            problems[0] = {"description": "", "cells": [_nbcell_to_raw(c) for c in preamble]}
+    return problems
+
+
+def _persist_session_results(session_id: str, session: GradingSession, session_total_tokens: int):
+    """채점/재채점 완료 후 세션 결과를 DB에 저장 (공용)"""
+    db = SessionLocal()
+    try:
+        results_data = [_dump_strip_images(r.model_dump()) for r in session.results]
+        db_record = db.query(models.GradingSessionDB).filter(
+            models.GradingSessionDB.id == session_id
+        ).first()
+        if db_record:
+            # cancel endpoint가 먼저 DB를 cancelled로 마킹했을 수 있으므로 유지
+            final_status = "cancelled" if session_id in cancelled_sessions else session.status
+            db_record.status = final_status
+            db_record.progress = session.progress
+            db_record.processed_students = session.processed_students
+            db_record.results_json = json.dumps(results_data, ensure_ascii=False)
+            db_record.error = session.error
+            db_record.tokens_used = (db_record.tokens_used or 0) + session_total_tokens
+            if final_status == "completed":
+                db_record.completed_at = datetime.utcnow()
+            db.commit()
+    finally:
+        db.close()
+        cancelled_sessions.discard(session_id)
 
 
 async def run_grading_session(
@@ -640,27 +749,85 @@ async def run_grading_session(
         session.current_student = None
 
     # Persist to DB
-    db = SessionLocal()
-    try:
-        results_data = [_dump_strip_images(r.model_dump()) for r in session.results]
-        db_record = db.query(models.GradingSessionDB).filter(
-            models.GradingSessionDB.id == session_id
-        ).first()
-        if db_record:
-            # cancel endpoint가 먼저 DB를 cancelled로 마킹했을 수 있으므로 유지
-            final_status = "cancelled" if session_id in cancelled_sessions else session.status
-            db_record.status = final_status
-            db_record.progress = session.progress
-            db_record.processed_students = session.processed_students
-            db_record.results_json = json.dumps(results_data, ensure_ascii=False)
-            db_record.error = session.error
-            db_record.tokens_used = (db_record.tokens_used or 0) + session_total_tokens
-            if final_status == "completed":
-                db_record.completed_at = datetime.utcnow()
-            db.commit()
-    finally:
-        db.close()
-        cancelled_sessions.discard(session_id)
+    _persist_session_results(session_id, session, session_total_tokens)
+
+
+async def run_regrade_session(
+    session_id: str,
+    answer_problems: dict,
+    students: list,
+    criteria: GradingCriteria,
+    grading_model: str,
+):
+    """저장된 입력(정답/루브릭/학생 데이터)으로 다른 모델 재채점 실행"""
+    session = grading_sessions[session_id]
+    session.status = "running"
+    total = len(students)
+
+    quota_exceeded = False
+    cancelled = False
+    session_total_tokens = 0
+    for i, stu in enumerate(students):
+        if session_id in cancelled_sessions:
+            cancelled = True
+            session.processed_students = i
+            session.progress = (i / total) * 100 if total else 0
+            break
+        filename = stu.get("filename", "")
+        session.current_student = filename
+        try:
+            student_problems = _reconstruct_student_problems(stu)
+            problem_results, error, student_tokens = await grade_student_problems(
+                student_problems=student_problems,
+                answer_problems=answer_problems,
+                criteria=criteria,
+                model=grading_model,
+            )
+            total_score = sum(p.obtained_score for p in problem_results)
+            max_total = sum(p.full_score for p in problem_results)
+            session.results.append(StudentResult(
+                filename=filename,
+                student_id=stu.get("student_id", ""),
+                student_name=stu.get("student_name", ""),
+                total_score=total_score,
+                max_total_score=max_total,
+                problems=problem_results,
+                error=error,
+            ))
+            session_total_tokens += student_tokens
+        except APIQuotaError:
+            quota_exceeded = True
+            session.processed_students = i
+            session.progress = (i / total) * 100
+            break
+        except Exception as e:
+            session.results.append(StudentResult(
+                filename=filename,
+                student_id=stu.get("student_id", ""),
+                student_name=stu.get("student_name", ""),
+                total_score=0,
+                max_total_score=sum(p.full_score for p in criteria.problems),
+                problems=[],
+                error=str(e),
+            ))
+
+        session.processed_students = i + 1
+        session.progress = ((i + 1) / total) * 100
+
+    if cancelled:
+        session.status = "cancelled"
+        session.current_student = None
+        session.error = "사용자 요청으로 채점이 중단되었습니다"
+    elif quota_exceeded:
+        session.status = "quota_exceeded"
+        session.current_student = None
+        session.error = "API 사용량이 초과되었습니다. 충전 후 다시 재채점하세요."
+    else:
+        session.status = "completed"
+        session.progress = 100.0
+        session.current_student = None
+
+    _persist_session_results(session_id, session, session_total_tokens)
 
 
 @app.post("/grading/resume/{session_id}")
@@ -815,6 +982,7 @@ async def get_session(
             "subject_code": subject_code,
             "subject_item_name": subject_item_name,
             "grading_model": grading_model,
+            "regraded_from": db_rec.regraded_from if db_rec else None,
             "created_at": created_at,
             "completed_at": completed_at,
         }
@@ -851,6 +1019,7 @@ async def get_session(
         "subject_code": db_record.subject.code if db_record.subject else None,
         "subject_item_name": subject_item_name,
         "grading_model": db_record.grading_model,
+        "regraded_from": db_record.regraded_from,
         "created_at": _to_kst(db_record.created_at),
         "completed_at": _to_kst(db_record.completed_at) if db_record.completed_at else None,
     }
@@ -930,6 +1099,8 @@ async def get_history(
             "processed_students": r.processed_students,
             "grading_model": r.grading_model,
             "grading_model_label": model_label_map.get(r.grading_model, r.grading_model),
+            "regraded_from": r.regraded_from,
+            "can_regrade": bool(r.criteria_json and r.answer_problems_json and r.results_json),
             "created_at": _to_kst(r.created_at),
             "completed_at": _to_kst(r.completed_at) if r.completed_at else None,
         })
@@ -973,6 +1144,76 @@ async def update_session_subject_item(
     record.subject_item_id = item.id
     db.commit()
     return {"subject_item_id": item.id, "subject_item_name": item.name}
+
+
+@app.post("/grading/session/{session_id}/regrade")
+async def regrade_session(
+    session_id: str,
+    body: RegradeRequest,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """저장된 입력(루브릭+정답+학생 데이터)으로 다른 모델 재채점.
+    기존 세션은 보존하고 새 세션을 생성하며, regraded_from으로 원본(루트)을 참조."""
+    orig = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.id == session_id,
+        models.GradingSessionDB.user_id == current_user["id"]
+    ).first()
+    if not orig:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+    if orig.status != "completed":
+        raise HTTPException(status_code=400, detail="완료된 세션만 재채점할 수 있습니다")
+    if not (orig.criteria_json and orig.answer_problems_json and orig.results_json):
+        raise HTTPException(status_code=400, detail="재채점 데이터가 저장되지 않은 세션입니다 (기능 추가 이전에 채점됨)")
+
+    from services.llm_service import AVAILABLE_MODELS
+    valid_model_ids = {m["id"] for m in AVAILABLE_MODELS}
+    if body.grading_model not in valid_model_ids:
+        raise HTTPException(status_code=400, detail="지원하지 않는 모델입니다")
+    if body.grading_model == orig.grading_model:
+        raise HTTPException(status_code=400, detail="이미 이 모델로 채점된 세션입니다. 다른 모델을 선택하세요.")
+
+    try:
+        criteria = GradingCriteria(**json.loads(orig.criteria_json))
+        answer_problems = {int(k): v for k, v in json.loads(orig.answer_problems_json).items()}
+        students = json.loads(orig.results_json)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"저장된 채점 데이터 복원 실패: {str(e)}")
+    if not students:
+        raise HTTPException(status_code=400, detail="저장된 학생 결과가 없어 재채점할 수 없습니다")
+
+    new_id = str(uuid.uuid4())
+    grading_sessions[new_id] = GradingSession(
+        session_id=new_id,
+        status="pending",
+        progress=0.0,
+        total_students=len(students),
+        processed_students=0,
+        results=[]
+    )
+
+    db.add(models.GradingSessionDB(
+        id=new_id,
+        subject_id=orig.subject_id,
+        subject_item_id=orig.subject_item_id,
+        user_id=current_user["id"],
+        status="running",
+        total_students=len(students),
+        processed_students=0,
+        grading_model=body.grading_model,
+        criteria_json=orig.criteria_json,
+        answer_problems_json=orig.answer_problems_json,
+        regraded_from=orig.regraded_from or orig.id,  # 루트 세션 기준으로 그룹화
+    ))
+    db.commit()
+
+    background_tasks.add_task(
+        run_regrade_session,
+        new_id, answer_problems, students, criteria, body.grading_model
+    )
+
+    return {"session_id": new_id, "total_students": len(students)}
 
 
 @app.get("/grading/session/{session_id}/results")

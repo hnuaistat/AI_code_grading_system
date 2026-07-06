@@ -7,7 +7,7 @@ from schemas import (
     PartialScoreResult, NotebookCell, NotebookCellOutput, PartialScoreCriterion
 )
 from services.notebook_service import (
-    extract_cell_outputs, extract_code_cells, parse_notebook,
+    extract_code_cells, parse_notebook,
     split_notebook_by_problems, execute_notebook
 )
 from services.llm_service import grade_with_ai, APIQuotaError
@@ -106,10 +106,27 @@ async def grade_student_notebook(
         if cells:
             answer_problems = {1: {'description': '', 'cells': [{'source': c['source'], 'outputs': []} for c in cells]}}
 
-    # Get answer outputs (pre-computed, not from execution)
-    answer_cell_outputs = extract_cell_outputs(answer_nb)
-    student_cell_outputs = extract_cell_outputs(student_nb)
+    return await grade_student_problems(
+        student_problems=student_problems,
+        answer_problems=answer_problems,
+        criteria=criteria,
+        model=model,
+        execution_error=execution_error,
+    )
 
+
+async def grade_student_problems(
+    student_problems: Dict[int, Dict[str, Any]],
+    answer_problems: Dict[int, Dict[str, Any]],
+    criteria: GradingCriteria,
+    model: Optional[str] = None,
+    execution_error: Optional[str] = None,
+) -> Tuple[List[ProblemResult], Optional[str], int]:
+    """
+    문항별로 분리된 데이터(student_problems/answer_problems)로 채점.
+    grade_student_notebook에서 분리 — 재채점(저장된 입력 재사용) 경로에서도 사용.
+    반환: (문제별 결과 리스트, 에러 메시지, 토큰 사용량)
+    """
     problem_results = []
     total_tokens = 0
     # 첫 문제 이전 공통 셀 (# 데이터 불러오기 + 패키지 임포트 등)

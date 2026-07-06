@@ -66,6 +66,9 @@ class GradingSessionDB(Base):
     results_json = Column(Text, nullable=True)
     tokens_used = Column(Integer, default=0)
     grading_model = Column(String(200), nullable=True)  # 채점에 사용된 모델 (예: openai/gpt-4o-mini)
+    criteria_json = Column(Text, nullable=True)          # 재채점용: 채점 시작 시 루브릭 원본
+    answer_problems_json = Column(Text, nullable=True)   # 재채점용: 문항별 정답 데이터 (이미지 제외)
+    regraded_from = Column(String(36), nullable=True)    # 재채점 원본 세션 id (루트 세션 기준)
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 

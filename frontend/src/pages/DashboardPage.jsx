@@ -196,8 +196,8 @@ export default function DashboardPage() {
     <div style={s.page}>
       <header style={s.header}>
         <div style={s.headerLeft}>
-          <button style={s.backBtn} onClick={() => navigate('/history')}>← 채점 기록</button>
-          <button style={s.backBtn} onClick={() => navigate('/upload')}>새 채점</button>
+          <button style={s.backBtn} onClick={() => navigate('/history')}>← 돌아가기</button>
+          <button style={s.backBtn} onClick={() => navigate('/upload')}>🏠 홈</button>
           <span style={s.headerTitle}>채점 결과 대시보드</span>
         </div>
         <div style={s.headerRight}>
@@ -275,6 +275,21 @@ export default function DashboardPage() {
                 : '—'}
             </span>
           </div>
+          {session.regraded_from && (
+            <>
+              <div style={s.infoDivider} />
+              <div style={s.infoItem}>
+                <span style={s.infoLabel}>🔄 재채점</span>
+                <span
+                  style={{ ...s.infoValue, color: '#2563eb', cursor: 'pointer', textDecoration: 'underline' }}
+                  onClick={() => navigate(`/dashboard/${session.regraded_from}`)}
+                  title="원본 채점 결과 보기"
+                >
+                  원본 보기 →
+                </span>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Progress / Status */}

@@ -60,6 +60,11 @@ class SessionSubjectItemUpdate(BaseModel):
     subject_item_name: str = ""
 
 
+class RegradeRequest(BaseModel):
+    """저장된 입력(루브릭+정답+학생 데이터)으로 다른 모델 재채점"""
+    grading_model: str
+
+
 class HistorySessionItem(BaseModel):
     session_id: str
     subject_id: Optional[int] = None

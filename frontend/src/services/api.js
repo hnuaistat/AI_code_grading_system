@@ -62,6 +62,8 @@ export const gradingAPI = {
   getHistory: () => API.get('/grading/history'),
   updateSessionItem: (sessionId, subjectItemName) =>
     API.patch(`/grading/session/${sessionId}/subject-item`, { subject_item_name: subjectItemName }),
+  regradeSession: (sessionId, gradingModel) =>
+    API.post(`/grading/session/${sessionId}/regrade`, { grading_model: gradingModel }),
   reviseProblem: (sessionId, payload) => API.patch(`/grading/session/${sessionId}/revise`, payload),
   getStudentDetail: (sessionId, filename) => API.get(`/grading/session/${sessionId}/student`, { params: { filename } }),
   getRevisions: (sessionId) => API.get(`/grading/session/${sessionId}/revisions`),

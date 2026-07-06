@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 import traceback
@@ -157,6 +158,33 @@ async def _call_with_retry(coro_fn, max_retries: int = 5):
             raise
 
 
+def _normalize_rubric_scores(rubric: Dict[str, Any]) -> Dict[str, Any]:
+    """문항별 partial 합계가 full_score를 초과하면 비례 축소하여 정확히 일치시킴.
+    합계 < full_score는 남은 배점 AI 자율 평가 정책이 있으므로 그대로 둠."""
+    if not isinstance(rubric, dict):
+        return rubric
+    for prob in rubric.get("problems", []) or []:
+        if not isinstance(prob, dict):
+            continue
+        criteria = prob.get("partial_score_criteria") or []
+        try:
+            full = float(prob.get("full_score", 0))
+            total = sum(float(c.get("score", 0)) for c in criteria)
+        except (TypeError, ValueError):
+            continue
+        if not criteria or full <= 0 or total <= full + 1e-6:
+            continue
+        scale = full / total
+        acc = 0.0
+        for c in criteria[:-1]:
+            new_score = round(float(c.get("score", 0)) * scale, 2)
+            c["score"] = new_score
+            acc += new_score
+        criteria[-1]["score"] = max(0.0, round(full - acc, 2))
+        print(f"[Rubric Normalize] {prob.get('problem_id')}: 항목 합계 {total}점 > 배점 {full}점 → 비례 조정")
+    return rubric
+
+
 def _load_rubric_guide() -> str:
     """루브릭 생성 가이드 파일을 읽어 반환."""
     guide_path = Path(__file__).resolve().parent.parent / "rubric_generation_guide.md"
@@ -206,6 +234,9 @@ async def generate_rubric_with_ai(
 ## 추가 지시사항
 - problem_id는 "Q1", "Q2", ... 형태로 작성하세요.
 - 각 문항의 partial_score_criteria 내 score 합계가 full_score와 정확히 일치해야 합니다.
+- 점수가 명시된 조건 하나를 여러 항목으로 분할하면, 분할된 항목들의 score 합이 원래 명시 점수와 같아야 합니다 (예: 1점 조건을 2개로 분할 → 0.5점 + 0.5점, 절대 1점 + 1점 금지).
+- JSON 출력 직전에 문항별 합계를 검산하고, full_score 초과 시 분할 항목 점수를 줄여 정확히 맞추세요.
+- 문제 설명에 (1), (2) 같은 소문제 번호가 있으면, 해당 조건에서 나온 모든 항목의 item 텍스트 맨 앞에 그 번호를 유지하세요 (분할된 항목도 동일 번호 유지).
 - 시각화 문항(matplotlib, seaborn 등)은 반드시 유형 A(세부 항목)로 작성하세요.
 - 데이터 처리/계산 문항은 유형 B(AI 자율) 또는 유형 A를 문항 특성에 맞게 선택하세요."""
 
@@ -271,7 +302,7 @@ async def generate_rubric_with_ai(
         except Exception as e:
             print(f"[JSON5 Parse Error] {e}")
             raise
-        return rubric
+        return _normalize_rubric_scores(rubric)
 
     except APIQuotaError:
         raise
@@ -305,6 +336,7 @@ async def decompose_rubric_item_with_ai(
 - 최대 3개 항목 이내
 - 반드시 JSON 배열만 반환 (다른 텍스트 금지)
 - keywords: 해당 항목 채점 시 코드에서 반드시 등장해야 하는 함수/값/파라미터명
+- 원본 항목이 (1), (2) 같은 번호로 시작하면 모든 세부 항목도 같은 번호로 시작
 
 응답 형식:
 [
@@ -358,10 +390,20 @@ async def decompose_rubric_item_with_ai(
         else:
             raise ValueError(f"예상치 못한 응답 형식: {content[:200]}")
 
+        # 원본 항목의 소문제 번호((1), (2) 등)를 모든 세부 항목에 보장
+        prefix_match = re.match(r"^\s*(\(\d+\))", item)
+        prefix = prefix_match.group(1) if prefix_match else ""
+
+        def _with_prefix(text: str) -> str:
+            text = text.strip()
+            if prefix and not text.startswith(prefix):
+                return f"{prefix} {text}"
+            return text
+
         return [
             {
-                "item": r.get("item", "") if isinstance(r, dict) else "",
-                "keywords": r.get("keywords", []) if isinstance(r, dict) and isinstance(r.get("keywords"), list) else []
+                "item": _with_prefix(r.get("item", "")),
+                "keywords": r.get("keywords", []) if isinstance(r.get("keywords"), list) else []
             }
             for r in result if isinstance(r, dict) and r.get("item")
         ]
@@ -382,7 +424,7 @@ async def grade_with_ai(
     full_score: Optional[float] = None,
     remaining_score: Optional[float] = None,
     model: Optional[str] = None,
-) -> Tuple[List[Dict[str, Any]], str, int]:
+) -> Tuple[List[Dict[str, Any]], str, int, bool]:
     """
     GPT-4o를 사용하여 채점 기준 기반 부분 점수 제도로 평가합니다.
 

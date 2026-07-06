@@ -109,6 +109,42 @@ export default function HistoryPage() {
     }
   };
 
+  // 다른 AI로 재채점
+  const [regradeTarget, setRegradeTarget] = useState(null); // 모달 대상 세션 (null = 닫힘)
+  const [availableModels, setAvailableModels] = useState([]);
+  const [regradeModel, setRegradeModel] = useState('');
+  const [regrading, setRegrading] = useState(false);
+  const [regradeError, setRegradeError] = useState('');
+
+  const openRegradeModal = async (session) => {
+    setRegradeTarget(session);
+    setRegradeModel('');
+    setRegradeError('');
+    if (availableModels.length === 0) {
+      try {
+        const res = await gradingAPI.getAvailableModels();
+        setAvailableModels(res.data.models || []);
+      } catch {
+        setRegradeError('모델 목록을 불러올 수 없습니다');
+      }
+    }
+  };
+
+  const startRegrade = async () => {
+    if (!regradeTarget || !regradeModel) return;
+    setRegrading(true);
+    setRegradeError('');
+    try {
+      const res = await gradingAPI.regradeSession(regradeTarget.session_id, regradeModel);
+      setRegradeTarget(null);
+      navigate(`/dashboard/${res.data.session_id}`);
+    } catch (e) {
+      setRegradeError(e.response?.data?.detail || '재채점 시작에 실패했습니다');
+    } finally {
+      setRegrading(false);
+    }
+  };
+
   const handleCancel = async (session) => {
     if (!window.confirm(`'${session.subject_item_name || session.subject_name || session.session_id.slice(0, 8)}' 채점을 강제 중단하시겠습니까?\n지금까지 채점된 결과는 보존됩니다.`)) return;
     setCancellingIds(prev => new Set(prev).add(session.session_id));
@@ -246,7 +282,7 @@ export default function HistoryPage() {
     <div style={s.page}>
       <header style={s.header}>
         <div style={s.headerLeft}>
-          <button style={s.backBtn} onClick={() => navigate('/upload')}>← 새 채점</button>
+          <button style={s.backBtn} onClick={() => navigate('/upload')}>🏠 홈</button>
           <span style={s.headerTitle}>📚 채점 기록</span>
         </div>
         <div style={s.headerRight}>
@@ -296,6 +332,22 @@ export default function HistoryPage() {
             const someSelected = deletableSessions.some(s => selectedIds.has(s.session_id));
             const groupSelectedIds = deletableSessions.filter(s => selectedIds.has(s.session_id)).map(s => s.session_id);
 
+            // 재채점 세션을 원본(루트) 바로 아래에 묶어서 배치
+            const idSet = new Set(sessions.map(s => s.session_id));
+            const childrenMap = {};
+            const roots = [];
+            sessions.forEach(s => {
+              if (s.regraded_from && idSet.has(s.regraded_from)) {
+                (childrenMap[s.regraded_from] = childrenMap[s.regraded_from] || []).push(s);
+              } else {
+                roots.push(s);
+              }
+            });
+            const displayRows = roots.flatMap(r => [
+              { session: r, isChild: false },
+              ...(childrenMap[r.session_id] || []).map(c => ({ session: c, isChild: true })),
+            ]);
+
             return (
               <div key={subjectName} style={s.subjectGroup}>
                 <div style={s.subjectHeader}>
@@ -341,9 +393,10 @@ export default function HistoryPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {sessions.map(session => {
+                      {displayRows.map(({ session, isChild }) => {
                         const isChecked = selectedIds.has(session.session_id);
                         const isDeletable = session.status !== 'running';
+                        const canRegrade = session.can_regrade && session.status === 'completed';
                         return (
                           <tr
                             key={session.session_id}
@@ -367,7 +420,19 @@ export default function HistoryPage() {
                                 <span style={{ color: '#cbd5e1', fontSize: 12 }}>—</span>
                               )}
                             </td>
-                            <td style={td}>{formatDate(session.created_at)}</td>
+                            <td style={td}>
+                              {isChild ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 8 }}>
+                                  <span style={{ color: '#94a3b8' }}>└</span>
+                                  <div>
+                                    <span style={s.regradeBadge}>🔄 재채점</span>
+                                    <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{formatDate(session.created_at)}</div>
+                                  </div>
+                                </div>
+                              ) : (
+                                formatDate(session.created_at)
+                              )}
+                            </td>
                             <td style={td}><StatusBadge status={session.status} /></td>
                             <td style={td} onClick={e => e.stopPropagation()}>
                               {editingItemId === session.session_id ? (
@@ -435,13 +500,27 @@ export default function HistoryPage() {
                                   {cancellingIds.has(session.session_id) ? '중단 중...' : '🛑 중단'}
                                 </button>
                               ) : (
-                                <button
-                                  style={s.deleteBtn}
-                                  onClick={e => { e.stopPropagation(); openDeleteModal(session); }}
-                                  title="채점 기록 삭제"
-                                >
-                                  삭제
-                                </button>
+                                <div style={{ display: 'inline-flex', gap: 4 }}>
+                                  <button
+                                    style={canRegrade ? s.regradeBtn : s.regradeBtnDisabled}
+                                    onClick={e => { e.stopPropagation(); if (canRegrade) openRegradeModal(session); }}
+                                    disabled={!canRegrade}
+                                    title={canRegrade
+                                      ? '다른 AI 모델로 재채점'
+                                      : (session.status !== 'completed'
+                                        ? '완료된 세션만 재채점할 수 있습니다'
+                                        : '재채점 데이터가 없는 세션입니다 (기능 추가 이전에 채점됨)')}
+                                  >
+                                    🔄
+                                  </button>
+                                  <button
+                                    style={s.deleteBtn}
+                                    onClick={e => { e.stopPropagation(); openDeleteModal(session); }}
+                                    title="채점 기록 삭제"
+                                  >
+                                    삭제
+                                  </button>
+                                </div>
                               )}
                             </td>
                           </tr>
@@ -589,6 +668,73 @@ export default function HistoryPage() {
           </div>
         );
       })()}
+
+      {/* 재채점 모델 선택 모달 */}
+      {regradeTarget && (
+        <div style={s.modalOverlay} onClick={() => { if (!regrading) setRegradeTarget(null); }}>
+          <div style={{ ...s.modal, maxWidth: 460 }} onClick={e => e.stopPropagation()}>
+            <div style={s.modalIcon}>🔄</div>
+            <h3 style={s.modalTitle}>다른 AI로 재채점</h3>
+            <p style={s.modalDesc}>
+              저장된 루브릭·정답·학생 데이터로 <strong>모델만 바꿔</strong> 다시 채점합니다.<br />
+              기존 결과는 보존되고, 새 채점 기록이 원본 아래에 추가됩니다.
+            </p>
+
+            <div style={s.modalInfoBox}>
+              <div style={s.modalInfoRow}>
+                <span style={s.modalInfoLabel}>과목</span>
+                <span style={s.modalInfoValue}>{regradeTarget.subject_name || '과목 미지정'}</span>
+              </div>
+              <div style={s.modalInfoRow}>
+                <span style={s.modalInfoLabel}>세부 항목</span>
+                <span style={s.modalInfoValue}>{regradeTarget.subject_item_name || '—'}</span>
+              </div>
+              <div style={s.modalInfoRow}>
+                <span style={s.modalInfoLabel}>학생 수</span>
+                <span style={s.modalInfoValue}>{regradeTarget.total_students}명</span>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <p style={s.modalConfirmLabel}>재채점에 사용할 모델을 선택하세요:</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {availableModels.map(m => {
+                  const isCurrent = m.id === regradeTarget.grading_model;
+                  const isSelected = regradeModel === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      style={isCurrent ? s.modelOptionDisabled : (isSelected ? s.modelOptionSelected : s.modelOption)}
+                      onClick={() => !isCurrent && setRegradeModel(m.id)}
+                      disabled={isCurrent}
+                    >
+                      <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{m.label}</span>
+                      {isCurrent && <span style={s.currentModelTag}>현재 채점 모델</span>}
+                      {isSelected && !isCurrent && <span style={{ color: '#2563eb', fontWeight: 700 }}>✓</span>}
+                    </button>
+                  );
+                })}
+                {availableModels.length === 0 && !regradeError && (
+                  <span style={{ fontSize: 13, color: '#94a3b8' }}>모델 목록 로딩 중...</span>
+                )}
+              </div>
+            </div>
+
+            {regradeError && <div style={s.modalError}>{regradeError}</div>}
+
+            <div style={s.modalActions}>
+              <button style={s.modalCancelBtn} onClick={() => setRegradeTarget(null)} disabled={regrading}>취소</button>
+              <button
+                style={regradeModel && !regrading ? s.regradeStartBtn : s.regradeStartBtnDisabled}
+                onClick={startRegrade}
+                disabled={!regradeModel || regrading}
+              >
+                {regrading ? '재채점 시작 중...' : '🔄 재채점 시작'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -672,6 +818,40 @@ const s = {
   viewBtn: { background: '#eff6ff', color: '#2563eb', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
   viewBtnDisabled: { background: '#f1f5f9', color: '#94a3b8', border: 'none', borderRadius: 6, padding: '5px 14px', cursor: 'default', fontSize: 13 },
   deleteBtn: { background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 6, padding: '5px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
+  regradeBtn: { background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
+  regradeBtnDisabled: { background: '#f8fafc', color: '#cbd5e1', border: '1px solid #e2e8f0', borderRadius: 6, padding: '5px 10px', cursor: 'not-allowed', fontSize: 13 },
+  regradeBadge: {
+    fontSize: 11, background: '#eff6ff', color: '#2563eb',
+    borderRadius: 4, padding: '2px 6px', fontWeight: 700, whiteSpace: 'nowrap',
+  },
+  modelOption: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    background: '#fff', border: '1.5px solid #e2e8f0', borderRadius: 8,
+    padding: '10px 14px', fontSize: 13, cursor: 'pointer', textAlign: 'left',
+  },
+  modelOptionSelected: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    background: '#eff6ff', border: '1.5px solid #2563eb', borderRadius: 8,
+    padding: '10px 14px', fontSize: 13, cursor: 'pointer', textAlign: 'left',
+  },
+  modelOptionDisabled: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    background: '#f1f5f9', border: '1.5px solid #e2e8f0', borderRadius: 8,
+    padding: '10px 14px', fontSize: 13, cursor: 'not-allowed', textAlign: 'left',
+    color: '#94a3b8',
+  },
+  currentModelTag: {
+    fontSize: 11, background: '#e2e8f0', color: '#64748b',
+    borderRadius: 4, padding: '2px 8px', fontWeight: 600,
+  },
+  regradeStartBtn: {
+    background: '#2563eb', color: '#fff', border: 'none',
+    borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+  },
+  regradeStartBtnDisabled: {
+    background: '#93c5fd', color: '#fff', border: 'none',
+    borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700, cursor: 'not-allowed',
+  },
   deleteBtnDisabled: { background: '#f1f5f9', color: '#cbd5e1', border: '1px solid #e2e8f0', borderRadius: 6, padding: '5px 14px', cursor: 'not-allowed', fontSize: 13 },
   cancelBtn: { background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' },
   empty: { textAlign: 'center', color: '#94a3b8', padding: '60px 0', fontSize: 16 },

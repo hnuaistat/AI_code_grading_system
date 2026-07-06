@@ -97,7 +97,7 @@ export default function RevisionLogPage() {
     <div style={s.page}>
       <header style={s.header}>
         <div style={s.headerLeft}>
-          <button style={s.backBtn} onClick={() => navigate('/upload')}>← 새 채점</button>
+          <button style={s.backBtn} onClick={() => navigate('/upload')}>🏠 홈</button>
           <span style={s.headerTitle}>📝 수정 로그</span>
         </div>
         <div style={s.headerRight}>
