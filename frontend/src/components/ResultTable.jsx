@@ -50,9 +50,15 @@ export default function ResultTable({ results, onSelectStudent }) {
     else { setSortField(field); setSortDir('desc'); }
   };
 
+  const SortArrow = ({ field }) => (
+    sortField === field
+      ? <span style={sortArrow}>{sortDir === 'asc' ? '↑' : '↓'}</span>
+      : null
+  );
+
   const Th = ({ label, field, isFirst }) => (
     <th style={isFirst ? { ...th, ...thSticky, top: 0, zIndex: 12 } : { ...th, position: 'sticky', top: 0, background: '#f8fafc', zIndex: 5 }} onClick={() => field && toggleSort(field)} role={field ? 'button' : undefined}>
-      {label} {field && sortField === field ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+      {label} {field && <SortArrow field={field} />}
     </th>
   );
 
@@ -87,7 +93,7 @@ export default function ResultTable({ results, onSelectStudent }) {
                 onClick={() => toggleSort('student_name')}
                 role="button"
               >
-                이름 {sortField === 'student_name' ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+                이름 <SortArrow field="student_name" />
               </th>
               <th style={{ ...th, position: 'sticky', top: 0, background: '#f8fafc', zIndex: 5, cursor: 'default' }}>상세</th>
               {allProblemIds.map(pid => {
@@ -159,6 +165,7 @@ export default function ResultTable({ results, onSelectStudent }) {
 }
 
 const th = { padding: '12px 16px', textAlign: 'left', fontSize: 13, fontWeight: 600, color: '#374151', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' };
+const sortArrow = { fontSize: 17, fontWeight: 900, color: '#2563eb', verticalAlign: 'middle', lineHeight: 1 };
 const thSticky = { position: 'sticky', left: 0, top: 0, background: '#f8fafc', zIndex: 12, borderRight: '1px solid #e2e8f0' };
 const td = { padding: '14px 16px', fontSize: 14, color: '#374151', verticalAlign: 'middle' };
 const tdSticky = { position: 'sticky', left: 0, background: '#fff', zIndex: 10, borderRight: '1px solid #f1f5f9' };

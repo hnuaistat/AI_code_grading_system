@@ -77,7 +77,7 @@ export default function HistoryPage() {
 
   // 다중 선택 삭제 (체크박스는 항상 표시)
   const [selectedIds, setSelectedIds] = useState(new Set());
-  const [showBulkModal, setShowBulkModal] = useState(false);
+  const [bulkTargetIds, setBulkTargetIds] = useState(null); // 삭제 모달 대상 (null = 닫힘)
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkDeleteProgress, setBulkDeleteProgress] = useState(0);
   const [bulkDeleteError, setBulkDeleteError] = useState('');
@@ -197,12 +197,8 @@ export default function HistoryPage() {
     });
   };
 
-  const clearSelection = () => {
-    setSelectedIds(new Set());
-  };
-
   const confirmBulkDelete = async () => {
-    const ids = [...selectedIds];
+    const ids = bulkTargetIds || [];
     setBulkDeleting(true);
     setBulkDeleteProgress(0);
     setBulkDeleteError('');
@@ -218,8 +214,12 @@ export default function HistoryPage() {
       setBulkDeleteProgress(Math.round((done / ids.length) * 100));
     }
     setBulkDeleting(false);
-    setShowBulkModal(false);
-    setSelectedIds(new Set());
+    setBulkTargetIds(null);
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.delete(id));
+      return next;
+    });
     if (failed > 0) setBulkDeleteError(`${failed}개 삭제 실패`);
     reloadHistory();
   };
@@ -241,8 +241,6 @@ export default function HistoryPage() {
     acc[key].push(h);
     return acc;
   }, {});
-
-  const selectedCount = selectedIds.size;
 
   return (
     <div style={s.page}>
@@ -277,18 +275,6 @@ export default function HistoryPage() {
               <option key={sub} value={sub}>{sub}</option>
             ))}
           </select>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              style={selectedCount > 0 ? s.bulkDeleteBtn : s.bulkDeleteBtnDisabled}
-              disabled={selectedCount === 0}
-              onClick={() => { setBulkDeleteError(''); setBulkConfirmText(''); setShowBulkModal(true); }}
-            >
-              🗑 {selectedCount > 0 ? `${selectedCount}개 삭제` : '선택 삭제'}
-            </button>
-            {selectedCount > 0 && (
-              <button style={s.bulkCancelBtn} onClick={clearSelection}>선택 해제</button>
-            )}
-          </div>
         </div>
 
         {bulkDeleteError && (
@@ -308,6 +294,7 @@ export default function HistoryPage() {
             const deletableSessions = sessions.filter(s => s.status !== 'running');
             const allSelected = deletableSessions.length > 0 && deletableSessions.every(s => selectedIds.has(s.session_id));
             const someSelected = deletableSessions.some(s => selectedIds.has(s.session_id));
+            const groupSelectedIds = deletableSessions.filter(s => selectedIds.has(s.session_id)).map(s => s.session_id);
 
             return (
               <div key={subjectName} style={s.subjectGroup}>
@@ -317,6 +304,14 @@ export default function HistoryPage() {
                   {deletableSessions.length > 0 && (
                     <button style={s.selectAllBtn} onClick={() => toggleSelectAll(sessions)}>
                       {allSelected ? '전체 해제' : '전체 선택'}
+                    </button>
+                  )}
+                  {groupSelectedIds.length > 0 && (
+                    <button
+                      style={s.bulkDeleteBtn}
+                      onClick={() => { setBulkDeleteError(''); setBulkConfirmText(''); setBulkTargetIds(groupSelectedIds); }}
+                    >
+                      🗑 {groupSelectedIds.length}개 삭제
                     </button>
                   )}
                 </div>
@@ -516,15 +511,15 @@ export default function HistoryPage() {
       )}
 
       {/* 다중 삭제 확인 모달 */}
-      {showBulkModal && (() => {
-        const selectedSessions = history.filter(h => selectedIds.has(h.session_id));
+      {bulkTargetIds && (() => {
+        const selectedSessions = history.filter(h => bulkTargetIds.includes(h.session_id));
         const bulkConfirmRequired = '삭제 확인';
         const bulkConfirmOk = bulkConfirmText.trim() === bulkConfirmRequired;
         return (
-          <div style={s.modalOverlay} onClick={() => { if (!bulkDeleting) { setShowBulkModal(false); } }}>
+          <div style={s.modalOverlay} onClick={() => { if (!bulkDeleting) { setBulkTargetIds(null); } }}>
             <div style={{ ...s.modal, maxWidth: 520 }} onClick={e => e.stopPropagation()}>
               <div style={s.modalIcon}>🗑️</div>
-              <h3 style={s.modalTitle}>{selectedCount}개 채점 기록을 삭제하시겠습니까?</h3>
+              <h3 style={s.modalTitle}>{bulkTargetIds.length}개 채점 기록을 삭제하시겠습니까?</h3>
               <p style={s.modalDesc}>
                 이 작업은 <strong>되돌릴 수 없습니다</strong>.<br />
                 아래 선택한 채점 기록과 학생 결과가 모두 삭제됩니다.
@@ -579,13 +574,13 @@ export default function HistoryPage() {
                     {bulkDeleteError && <div style={s.modalError}>{bulkDeleteError}</div>}
                   </div>
                   <div style={s.modalActions}>
-                    <button style={s.modalCancelBtn} onClick={() => setShowBulkModal(false)}>취소</button>
+                    <button style={s.modalCancelBtn} onClick={() => setBulkTargetIds(null)}>취소</button>
                     <button
                       style={bulkConfirmOk ? s.modalDeleteBtn : s.modalDeleteBtnDisabled}
                       onClick={confirmBulkDelete}
                       disabled={!bulkConfirmOk}
                     >
-                      {selectedCount}개 모두 삭제
+                      {bulkTargetIds.length}개 모두 삭제
                     </button>
                   </div>
                 </>
@@ -623,16 +618,8 @@ const s = {
   search: { flex: 1, padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none' },
   select: { padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none', background: '#fff', cursor: 'pointer' },
   bulkDeleteBtn: {
-    background: '#dc2626', color: '#fff', border: 'none', borderRadius: 8,
-    padding: '10px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
-  },
-  bulkDeleteBtnDisabled: {
-    background: '#fca5a5', color: '#fff', border: 'none', borderRadius: 8,
-    padding: '10px 18px', fontSize: 14, fontWeight: 700, cursor: 'not-allowed', whiteSpace: 'nowrap',
-  },
-  bulkCancelBtn: {
-    background: '#fff', color: '#64748b', border: '1.5px solid #e2e8f0', borderRadius: 8,
-    padding: '10px 16px', fontSize: 14, cursor: 'pointer', fontWeight: 500,
+    background: '#dc2626', color: '#fff', border: 'none', borderRadius: 6,
+    padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
   },
   bulkError: {
     background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626',
