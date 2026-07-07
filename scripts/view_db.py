@@ -9,8 +9,8 @@ if sys.platform == 'win32':
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-# DB 파일 경로
-db_path = Path(__file__).parent / "backend" / "grading.db"
+# DB 파일 경로 (scripts/ 폴더 기준 프로젝트 루트의 backend/grading.db)
+db_path = Path(__file__).parent.parent / "backend" / "grading.db"
 
 if not db_path.exists():
     print(f"[!] DB 파일을 찾을 수 없습니다: {db_path}")

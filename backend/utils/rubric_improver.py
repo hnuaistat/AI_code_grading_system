@@ -11,9 +11,11 @@ from openai import AsyncOpenAI
 
 def _load_guideline() -> str:
     """루브릭 가이드라인 파일을 읽어 반환."""
-    guide_path = Path(__file__).resolve().parent.parent.parent / "RUBRIC_GUIDELINE.md"
-    if guide_path.exists():
-        return guide_path.read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parent.parent.parent
+    # 가이드라인 문서는 docs/로 이동됨 (구 위치도 fallback으로 유지)
+    for guide_path in (root / "docs" / "RUBRIC_GUIDELINE.md", root / "RUBRIC_GUIDELINE.md"):
+        if guide_path.exists():
+            return guide_path.read_text(encoding="utf-8")
     return ""
 
 
