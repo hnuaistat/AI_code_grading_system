@@ -22,6 +22,15 @@ class RegisterRequest(BaseModel):
     password: str
 
 
+class UpdateEmailRequest(BaseModel):
+    email: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class SubjectItemResponse(BaseModel):
     id: int
     name: str

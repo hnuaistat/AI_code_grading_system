@@ -1,13 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../App';
 import { gradingAPI } from '../services/api';
 
+// 날짜/시간을 각각 nowrap으로 감싸 줄바꿈이 필요하면 날짜와 시간 사이에서만 일어나게 함
 function formatDate(iso) {
   if (!iso) return '-';
   const d = new Date(iso);
-  return d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit' });
+  const datePart = d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  const timePart = d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+  return (
+    <>
+      <span style={{ whiteSpace: 'nowrap' }}>{datePart}</span>{' '}
+      <span style={{ whiteSpace: 'nowrap' }}>{timePart}</span>
+    </>
+  );
 }
 
 function formatDuration(createdAt, completedAt) {
@@ -62,7 +68,6 @@ function ModelBadge({ model, label }) {
 }
 
 export default function HistoryPage() {
-  const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -233,6 +238,14 @@ export default function HistoryPage() {
     });
   };
 
+  const deselectAll = (sessions) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      sessions.forEach(s => next.delete(s.session_id));
+      return next;
+    });
+  };
+
   const confirmBulkDelete = async () => {
     const ids = bulkTargetIds || [];
     setBulkDeleting(true);
@@ -280,19 +293,8 @@ export default function HistoryPage() {
 
   return (
     <div style={s.page}>
-      <header style={s.header}>
-        <div style={s.headerLeft}>
-          <button style={s.backBtn} onClick={() => navigate('/upload')}>🏠 홈</button>
-          <span style={s.headerTitle}>📚 채점 기록</span>
-        </div>
-        <div style={s.headerRight}>
-          <button style={s.revisionBtn} onClick={() => navigate('/revisions')}>📝 수정 로그</button>
-          <span style={s.userName}>{user?.username}</span>
-          <button style={s.logoutBtn} onClick={logout}>로그아웃</button>
-        </div>
-      </header>
-
       <main style={s.main}>
+        <h1 style={s.pageTitle}>📚 채점 기록</h1>
         {/* Filter bar */}
         <div style={s.filterBar}>
           <input
@@ -331,6 +333,9 @@ export default function HistoryPage() {
             const allSelected = deletableSessions.length > 0 && deletableSessions.every(s => selectedIds.has(s.session_id));
             const someSelected = deletableSessions.some(s => selectedIds.has(s.session_id));
             const groupSelectedIds = deletableSessions.filter(s => selectedIds.has(s.session_id)).map(s => s.session_id);
+            const compareIds = deletableSessions
+              .filter(s => selectedIds.has(s.session_id) && s.status === 'completed')
+              .map(s => s.session_id);
 
             // 재채점 세션을 원본(루트) 바로 아래에 묶어서 배치
             const idSet = new Set(sessions.map(s => s.session_id));
@@ -360,9 +365,17 @@ export default function HistoryPage() {
                 <div style={s.subjectHeader}>
                   <span style={s.subjectName}>{subjectName}</span>
                   <span style={s.sessionCount}>{sessions.length}회 채점</span>
-                  {deletableSessions.length > 0 && (
-                    <button style={s.selectAllBtn} onClick={() => toggleSelectAll(sessions)}>
-                      {allSelected ? '전체 해제' : '전체 선택'}
+                  {groupSelectedIds.length > 0 && (
+                    <button style={s.selectAllBtn} onClick={() => deselectAll(sessions)}>
+                      선택 해제
+                    </button>
+                  )}
+                  {compareIds.length >= 2 && (
+                    <button
+                      style={s.compareBtn}
+                      onClick={() => navigate(`/compare?ids=${compareIds.join(',')}`)}
+                    >
+                      ⚖ {compareIds.length}개 비교
                     </button>
                   )}
                   {groupSelectedIds.length > 0 && (
@@ -389,15 +402,15 @@ export default function HistoryPage() {
                             style={{ cursor: 'pointer', width: 15, height: 15 }}
                           />
                         </th>
-                        <th style={{ ...th, width: '132px' }}>날짜</th>
-                        <th style={{ ...th, width: '88px' }}>상태</th>
-                        <th style={th}>세부 항목</th>
-                        <th style={{ ...th, textAlign: 'center', width: '64px' }}>학생 수</th>
-                        <th style={{ ...th, width: '132px' }}>완료 시간</th>
-                        <th style={{ ...th, textAlign: 'center', width: '96px' }}>채점 AI</th>
-                        <th style={{ ...th, textAlign: 'center', width: '68px' }}>결과 보기</th>
-                        <th style={{ ...th, textAlign: 'center', width: '106px' }}>새 AI 채점</th>
-                        <th style={{ ...th, textAlign: 'center', width: '66px' }}>삭제</th>
+                        <th style={{ ...th, width: '13%' }}>날짜</th>
+                        <th style={{ ...th, width: '8%' }}>상태</th>
+                        <th style={{ ...th, width: '17%' }}>세부 항목</th>
+                        <th style={{ ...th, textAlign: 'center', width: '8%' }}>학생 수</th>
+                        <th style={{ ...th, width: '13%' }}>완료 시간</th>
+                        <th style={{ ...th, textAlign: 'center', width: '12%' }}>채점 AI</th>
+                        <th style={{ ...th, textAlign: 'center', width: '8%' }}>결과 보기</th>
+                        <th style={{ ...th, textAlign: 'center', width: '11%' }}>새 AI 채점</th>
+                        <th style={{ ...th, textAlign: 'center', width: '6%' }}>삭제</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -416,7 +429,7 @@ export default function HistoryPage() {
                             }}
                             onClick={() => { if (isDeletable) toggleSelect(session.session_id); }}
                           >
-                            <td style={{ ...td, textAlign: 'center', boxShadow: inGroup ? 'inset 3px 0 0 #93c5fd' : 'none' }}>
+                            <td style={{ ...td, textAlign: 'center' }}>
                               {isDeletable ? (
                                 <input
                                   type="checkbox"
@@ -431,12 +444,9 @@ export default function HistoryPage() {
                             </td>
                             <td style={td}>
                               {isChild ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 8 }}>
-                                  <span style={{ color: '#94a3b8' }}>└</span>
-                                  <div>
-                                    <span style={s.regradeBadge}>🆕 새 AI 채점</span>
-                                    <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{formatDate(session.created_at)}</div>
-                                  </div>
+                                <div>
+                                  <span style={s.regradeBadge}>🆕 새 AI 채점</span>
+                                  <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{formatDate(session.created_at)}</div>
                                 </div>
                               ) : (
                                 formatDate(session.created_at)
@@ -445,7 +455,7 @@ export default function HistoryPage() {
                             <td style={{ ...td, padding: '14px 8px' }}><StatusBadge status={session.status} /></td>
                             <td style={td} onClick={e => e.stopPropagation()}>
                               {editingItemId === session.session_id ? (
-                                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'center' }}>
                                   <input
                                     value={itemDraft}
                                     onChange={e => setItemDraft(e.target.value)}
@@ -752,8 +762,8 @@ export default function HistoryPage() {
   );
 }
 
-const th = { padding: '11px 16px', textAlign: 'left', fontSize: 13, fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' };
-const td = { padding: '14px 16px', fontSize: 14, color: '#374151', verticalAlign: 'middle' };
+const th = { padding: '11px 16px', textAlign: 'center', fontSize: 13, fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' };
+const td = { padding: '14px 16px', fontSize: 14, color: '#374151', verticalAlign: 'middle', textAlign: 'center' };
 
 const s = {
   page: { minHeight: '100vh', background: '#f8fafc' },
@@ -773,12 +783,17 @@ const s = {
     padding: '6px 14px', cursor: 'pointer', fontSize: 14, color: '#92400e', fontWeight: 500,
   },
   main: { maxWidth: 1100, margin: '0 auto', padding: '32px 24px' },
+  pageTitle: { fontSize: 22, fontWeight: 700, color: '#1e293b', margin: '0 0 24px' },
   filterBar: { display: 'flex', gap: 12, marginBottom: 28, alignItems: 'center' },
   search: { flex: 1, padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none' },
   select: { padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none', background: '#fff', cursor: 'pointer' },
   bulkDeleteBtn: {
     background: '#dc2626', color: '#fff', border: 'none', borderRadius: 6,
     padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+  },
+  compareBtn: {
+    background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 6,
+    padding: '3px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
   },
   bulkError: {
     background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626',

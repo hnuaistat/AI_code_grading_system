@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useAuth } from '../App';
 import { gradingAPI } from '../services/api';
+import { sendBrowserNotification } from '../services/notify';
 import ResultTable from '../components/ResultTable';
 import StudentDetailModal from '../components/StudentDetailModal';
 import StatsDashboard from '../components/StatsDashboard';
 
 export default function DashboardPage() {
   const { sessionId } = useParams();
-  const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [session, setSession] = useState(null);
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -69,6 +68,22 @@ export default function DashboardPage() {
     const interval = setInterval(fetchSession, 2000);
     return () => clearInterval(interval);
   }, [session?.status, fetchSession]);
+
+  // 채점 완료/오류 시 브라우저 알림 (진행 중 상태를 거쳐야 발송 — 완료된 세션 열람 시 오발송 방지)
+  const notifyStatusRef = useRef(null);
+  useEffect(() => {
+    const status = session?.status;
+    if (!status) return;
+    const prev = notifyStatusRef.current;
+    notifyStatusRef.current = status;
+    if (prev !== 'running' && prev !== 'pending') return;
+    if (status === 'completed') {
+      const name = [session.subject_name, session.subject_item_name].filter(Boolean).join(' · ');
+      sendBrowserNotification('✅ 채점 완료', `${name || '채점'} — 학생 ${session.total_students}명 채점이 끝났습니다.`);
+    } else if (status === 'error' || status === 'quota_exceeded') {
+      sendBrowserNotification('⚠️ 채점 중단', '채점이 중단되었습니다. 대시보드를 확인해주세요.');
+    }
+  }, [session]);
 
   // 채점 시작을 관측한 시점의 (시각, 처리 인원)을 기준점으로 저장
   useEffect(() => {
@@ -194,19 +209,11 @@ export default function DashboardPage() {
 
   return (
     <div style={s.page}>
-      <header style={s.header}>
-        <div style={s.headerLeft}>
-          <button style={s.backBtn} onClick={() => navigate('/history')}>← 돌아가기</button>
-          <button style={s.backBtn} onClick={() => navigate('/upload')}>🏠 홈</button>
-          <span style={s.headerTitle}>채점 결과 대시보드</span>
-        </div>
-        <div style={s.headerRight}>
-          <span style={s.userName}>{user?.username}</span>
-          <button style={s.logoutBtn} onClick={logout}>로그아웃</button>
-        </div>
-      </header>
-
       <main style={s.main}>
+        <div style={s.pageTitleRow}>
+          <button style={s.backBtn} onClick={() => navigate('/history')}>← 채점 기록</button>
+          <h1 style={s.pageTitle}>채점 결과 대시보드</h1>
+        </div>
         {/* 채점 세션 정보 배너 */}
         <div style={s.infoBanner}>
           <div style={s.infoItem}>
@@ -524,6 +531,8 @@ const s = {
   userName: { fontSize:14, color:'#64748b' },
   logoutBtn: { background:'none', border:'1px solid #e2e8f0', borderRadius:6, padding:'6px 14px', cursor:'pointer', fontSize:14, color:'#64748b' },
   main: { maxWidth:1100, margin:'0 auto', padding:'16px 24px 24px' },
+  pageTitleRow: { display:'flex', alignItems:'center', gap:14, margin:'16px 0 20px' },
+  pageTitle: { fontSize:22, fontWeight:700, color:'#1e293b', margin:0 },
   infoBanner: {
     background: '#fff', borderRadius: 10, padding: '8px 16px',
     marginBottom: 12, boxShadow: '0 1px 6px rgba(0,0,0,0.06)',

@@ -24,13 +24,14 @@ import models
 from database import engine, SessionLocal, get_db
 from auth import (
     authenticate_user, create_access_token, get_current_user,
-    get_password_hash, ACCESS_TOKEN_EXPIRE_MINUTES, require_admin
+    get_password_hash, verify_password, ACCESS_TOKEN_EXPIRE_MINUTES, require_admin
 )
 from schemas import (
     Token, LoginRequest, RegisterRequest, GradingCriteria, GradingSession,
     StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem, SubjectItemCreate,
     ProblemRevisionRequest, RevisionLogItem, SubjectUpdate, SubjectItemUpdate,
-    DecomposeRequest, SessionSubjectItemUpdate, RegradeRequest
+    DecomposeRequest, SessionSubjectItemUpdate, RegradeRequest,
+    UpdateEmailRequest, ChangePasswordRequest
 )
 from services.notebook_service import (
     extract_notebooks_from_zip, parse_student_id_from_filename,
@@ -222,6 +223,49 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
 @app.get("/auth/me")
 async def get_me(current_user=Depends(get_current_user)):
     return current_user
+
+
+@app.patch("/auth/me")
+async def update_me(
+    request: UpdateEmailRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """이메일 변경 (아이디/역할은 변경 불가)."""
+    email = request.email.strip()
+    if not email or "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="올바른 이메일 형식이 아닙니다")
+    dup = db.query(models.User).filter(
+        models.User.email == email,
+        models.User.id != current_user["id"]
+    ).first()
+    if dup:
+        raise HTTPException(status_code=400, detail="이미 사용 중인 이메일입니다")
+
+    user = db.query(models.User).filter(models.User.id == current_user["id"]).first()
+    user.email = email
+    db.commit()
+    return {"id": user.id, "username": user.username, "email": user.email, "role": user.role}
+
+
+@app.post("/auth/change-password")
+async def change_password(
+    request: ChangePasswordRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """비밀번호 변경 — 현재 비밀번호 확인 필수."""
+    user = db.query(models.User).filter(models.User.id == current_user["id"]).first()
+    if not verify_password(request.current_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="현재 비밀번호가 올바르지 않습니다")
+    if len(request.new_password) < 6:
+        raise HTTPException(status_code=400, detail="새 비밀번호는 6자 이상이어야 합니다")
+    if request.new_password == request.current_password:
+        raise HTTPException(status_code=400, detail="새 비밀번호가 현재 비밀번호와 같습니다")
+
+    user.hashed_password = get_password_hash(request.new_password)
+    db.commit()
+    return {"message": "비밀번호가 변경되었습니다"}
 
 
 # ─── Subjects ──────────────────────────────────────────────────────────────────

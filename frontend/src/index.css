@@ -4,4 +4,7 @@ body {
   background: #f8fafc;
   color: #1e293b;
   min-height: 100vh;
+  /* 한글 어절 중간에서 줄바꿈 금지 (단어 단위로만 줄바꿈) */
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }

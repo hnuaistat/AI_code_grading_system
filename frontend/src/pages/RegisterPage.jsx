@@ -38,7 +38,7 @@ export default function RegisterPage() {
         <div style={s.logo}>
           <div style={s.logoIcon}>📓</div>
           <h1 style={s.title}>회원가입</h1>
-          <p style={s.subtitle}>Jupyter 자동 채점 시스템</p>
+          <p style={s.subtitle}>AI 채점 조교</p>
         </div>
 
         <form onSubmit={handleSubmit} style={s.form}>

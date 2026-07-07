@@ -164,10 +164,10 @@ export default function ResultTable({ results, onSelectStudent }) {
   );
 }
 
-const th = { padding: '12px 16px', textAlign: 'left', fontSize: 13, fontWeight: 600, color: '#374151', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' };
+const th = { padding: '12px 16px', textAlign: 'center', fontSize: 13, fontWeight: 600, color: '#374151', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' };
 const sortArrow = { fontSize: 17, fontWeight: 900, color: '#2563eb', verticalAlign: 'middle', lineHeight: 1 };
 const thSticky = { position: 'sticky', left: 0, top: 0, background: '#f8fafc', zIndex: 12, borderRight: '1px solid #e2e8f0' };
-const td = { padding: '14px 16px', fontSize: 14, color: '#374151', verticalAlign: 'middle' };
+const td = { padding: '14px 16px', fontSize: 14, color: '#374151', verticalAlign: 'middle', textAlign: 'center' };
 const tdSticky = { position: 'sticky', left: 0, background: '#fff', zIndex: 10, borderRight: '1px solid #f1f5f9' };
 const s = {
   search: { width: '100%', padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, marginBottom: 16, outline: 'none' },

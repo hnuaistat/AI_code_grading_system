@@ -5,8 +5,11 @@ import RegisterPage from './pages/RegisterPage';
 import UploadPage from './pages/UploadPage';
 import DashboardPage from './pages/DashboardPage';
 import HistoryPage from './pages/HistoryPage';
+import ComparePage from './pages/ComparePage';
 import RevisionLogPage from './pages/RevisionLogPage';
+import SettingsPage from './pages/SettingsPage';
 import AdminPage from './pages/AdminPage';
+import AppLayout from './components/AppLayout';
 import { authAPI } from './services/api';
 
 export const AuthContext = createContext(null);
@@ -49,6 +52,13 @@ export default function App() {
     localStorage.removeItem('token');
     setUser(null);
   };
+  // 이메일 변경 등 프로필 수정 후 컨텍스트의 사용자 정보 갱신
+  const refreshUser = async () => {
+    try {
+      const res = await authAPI.me();
+      setUser(res.data);
+    } catch { /* 토큰 만료 시 인터셉터가 처리 */ }
+  };
 
   if (loading) return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', fontSize: 18, color: '#64748b' }}>
@@ -57,16 +67,20 @@ export default function App() {
   );
 
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, login, logout, refreshUser }}>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
-          <Route path="/upload" element={<PrivateRoute><UploadPage /></PrivateRoute>} />
-          <Route path="/history" element={<PrivateRoute><HistoryPage /></PrivateRoute>} />
-          <Route path="/revisions" element={<PrivateRoute><RevisionLogPage /></PrivateRoute>} />
-          <Route path="/dashboard/:sessionId" element={<PrivateRoute><DashboardPage /></PrivateRoute>} />
+          <Route element={<PrivateRoute><AppLayout /></PrivateRoute>}>
+            <Route path="/upload" element={<UploadPage />} />
+            <Route path="/history" element={<HistoryPage />} />
+            <Route path="/compare" element={<ComparePage />} />
+            <Route path="/revisions" element={<RevisionLogPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/dashboard/:sessionId" element={<DashboardPage />} />
+          </Route>
           <Route path="*" element={<Navigate to={user ? (user.role === 'admin' ? "/admin" : "/upload") : "/login"} replace />} />
         </Routes>
       </BrowserRouter>

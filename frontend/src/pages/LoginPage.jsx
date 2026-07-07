@@ -35,7 +35,7 @@ export default function LoginPage() {
       <div style={styles.card}>
         <div style={styles.logo}>
           <div style={styles.logoIcon}>📓</div>
-          <h1 style={styles.title}>Jupyter 자동 채점 시스템</h1>
+          <h1 style={styles.title}>AI 채점 조교</h1>
           <p style={styles.subtitle}>평가자 로그인</p>
         </div>
         <form onSubmit={handleSubmit} style={styles.form}>

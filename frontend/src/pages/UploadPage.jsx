@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
-import { useAuth } from '../App';
 import { gradingAPI, subjectAPI } from '../services/api';
 import StepIndicator from '../components/StepIndicator';
 
@@ -686,7 +685,6 @@ export default function UploadPage() {
   const [availableModels, setAvailableModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
 
-  const { user, logout } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -700,6 +698,24 @@ export default function UploadPage() {
       setSelectedModel(res.data.default || '');
     }).catch(() => { });
   }, []);
+
+  // 진행 중인 항목 삭제 요청 (✕ 더블클릭 중복 방지)
+  const deletingItemsRef = useRef(new Set());
+
+  // 서버와 목록 재동기화 (404 등 stale 상태 복구용) — 유효하지 않은 선택은 해제
+  const reloadSubjects = async () => {
+    try {
+      const res = await subjectAPI.list();
+      setSubjects(res.data);
+      const sub = res.data.find(s2 => String(s2.id) === selectedSubjectId);
+      if (!sub) {
+        setSelectedSubjectId(res.data.length > 0 ? String(res.data[0].id) : '');
+        setSelectedItemId('');
+      } else if (selectedItemId && !(sub.items || []).some(it => String(it.id) === selectedItemId)) {
+        setSelectedItemId('');
+      }
+    } catch { /* 네트워크 오류 시 기존 목록 유지 */ }
+  };
 
   const handleCreateSubject = async () => {
     if (!newSubjectName.trim()) return;
@@ -781,7 +797,15 @@ export default function UploadPage() {
       setEditItemName('');
       // 수정 모드 유지 (다른 항목도 계속 수정 가능)
     } catch (err) {
-      setError(err.response?.data?.detail || '항목 수정에 실패했습니다');
+      if (err.response?.status === 404) {
+        // 다른 곳에서 이미 삭제/변경된 항목 — 목록을 서버와 다시 맞춤
+        setEditingItemId(null);
+        setEditItemName('');
+        await reloadSubjects();
+        setError('항목이 이미 삭제되어 목록을 새로고침했습니다');
+      } else {
+        setError(err.response?.data?.detail || '항목 수정에 실패했습니다');
+      }
     } finally {
       setEditItemLoading(false);
     }
@@ -789,16 +813,28 @@ export default function UploadPage() {
 
   const handleDeleteItem = async (itemId) => {
     if (!selectedSubjectId) return;
-    try {
-      await subjectAPI.deleteItem(selectedSubjectId, itemId);
+    if (deletingItemsRef.current.has(itemId)) return; // ✕ 더블클릭 중복 요청 방지
+    deletingItemsRef.current.add(itemId);
+    const removeLocally = () => {
       setSubjects(prev => prev.map(s =>
         s.id === parseInt(selectedSubjectId)
           ? { ...s, items: s.items.filter(item => item.id !== itemId) }
           : s
       ));
       if (selectedItemId === String(itemId)) setSelectedItemId('');
+    };
+    try {
+      await subjectAPI.deleteItem(selectedSubjectId, itemId);
+      removeLocally();
     } catch (err) {
-      setError(err.response?.data?.detail || '항목 삭제에 실패했습니다');
+      if (err.response?.status === 404) {
+        // 이미 삭제된 항목 (중복 클릭/다른 탭) — 에러 없이 목록만 동기화
+        removeLocally();
+      } else {
+        setError(err.response?.data?.detail || '항목 삭제에 실패했습니다');
+      }
+    } finally {
+      deletingItemsRef.current.delete(itemId);
     }
   };
 
@@ -887,19 +923,6 @@ export default function UploadPage() {
 
   return (
     <div style={s.page}>
-      <header style={s.header}>
-        <div style={s.headerLeft}>
-          <span style={{ fontSize: 24 }}>📓</span>
-          <span style={s.headerTitle}>Jupyter 자동 채점 시스템</span>
-        </div>
-        <div style={s.headerRight}>
-          <button style={s.historyBtn} onClick={() => navigate('/history')}>📚 채점 기록</button>
-          <button style={s.revisionBtn} onClick={() => navigate('/revisions')}>📝 수정 로그</button>
-          <span style={s.userName}>{user?.username} ({user?.role})</span>
-          <button style={s.logoutBtn} onClick={logout}>로그아웃</button>
-        </div>
-      </header>
-
       <main style={s.main}>
         <StepIndicator steps={STEPS} current={step} />
 
@@ -1259,7 +1282,7 @@ export default function UploadPage() {
 }
 
 const s = {
-  page: { minHeight: '100vh', background: '#e3cef4ff' },
+  page: { minHeight: '100vh', background: '#f8fafc' },
   header: {
     background: '#fff', borderBottom: '1px solid #e2e8f0',
     padding: '0 32px', height: 64, display: 'flex',

@@ -23,6 +23,9 @@ export const authAPI = {
   login: (username, password) => API.post('/auth/login', { username, password }),
   register: (username, email, password) => API.post('/auth/register', { username, email, password }),
   me: () => API.get('/auth/me'),
+  updateEmail: (email) => API.patch('/auth/me', { email }),
+  changePassword: (currentPassword, newPassword) =>
+    API.post('/auth/change-password', { current_password: currentPassword, new_password: newPassword }),
 };
 
 export const subjectAPI = {

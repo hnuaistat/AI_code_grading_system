@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../App';
 import { gradingAPI } from '../services/api';
 
 function formatDateTime(iso) {
@@ -47,7 +46,6 @@ function ValueBox({ value, isOld }) {
 }
 
 export default function RevisionLogPage() {
-  const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -95,19 +93,8 @@ export default function RevisionLogPage() {
 
   return (
     <div style={s.page}>
-      <header style={s.header}>
-        <div style={s.headerLeft}>
-          <button style={s.backBtn} onClick={() => navigate('/upload')}>🏠 홈</button>
-          <span style={s.headerTitle}>📝 수정 로그</span>
-        </div>
-        <div style={s.headerRight}>
-          <button style={s.navBtn} onClick={() => navigate('/history')}>📚 채점 기록</button>
-          <span style={s.userName}>{user?.username}</span>
-          <button style={s.logoutBtn} onClick={logout}>로그아웃</button>
-        </div>
-      </header>
-
       <main style={s.main}>
+        <h1 style={s.pageTitle}>📝 수정 로그</h1>
         {/* 통계 */}
         <div style={s.statsRow}>
           <div style={s.statCard}>
@@ -260,6 +247,7 @@ const s = {
     padding: '6px 14px', cursor: 'pointer', fontSize: 14, color: '#64748b',
   },
   main: { maxWidth: 1100, margin: '0 auto', padding: '32px 24px' },
+  pageTitle: { fontSize: 22, fontWeight: 700, color: '#1e293b', margin: '0 0 24px' },
 
   /* 통계 카드 */
   statsRow: {
