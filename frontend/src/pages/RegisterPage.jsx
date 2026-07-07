@@ -86,7 +86,7 @@ function Field({ label, type, value, onChange, placeholder, required }) {
 const s = {
   container: {
     minHeight: '100vh', display: 'flex', alignItems: 'center',
-    justifyContent: 'center', background: 'linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%)',
+    justifyContent: 'center', background: '#f8fafc',
     padding: 24,
   },
   card: {

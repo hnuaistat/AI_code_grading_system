@@ -20,6 +20,9 @@ backend/grading.db
 .env
 backend/.env
 
+# 계정 정보 (커밋 금지)
+CREDENTIALS.md
+
 # OS
 .DS_Store
 Thumbs.db

@@ -10,7 +10,13 @@ from schemas import TokenData
 from database import get_db
 import models
 
-SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret-key-change-in-production")
+# SECRET_KEY 미설정 시 공개된 고정 문자열 대신 임시 랜덤 키 생성 (토큰 위조 방지)
+# 주의: 랜덤 키는 서버 재시작 시 바뀌어 기존 로그인이 모두 풀림 — 반드시 .env에 SECRET_KEY 설정
+SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    import secrets as _secrets
+    SECRET_KEY = _secrets.token_hex(32)
+    print("⚠️  SECRET_KEY 환경변수가 없어 임시 랜덤 키를 사용합니다. .env에 SECRET_KEY를 설정하세요.")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 

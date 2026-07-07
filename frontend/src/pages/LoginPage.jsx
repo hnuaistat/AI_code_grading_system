@@ -67,14 +67,10 @@ export default function LoginPage() {
           </button>
         </form>
         <div style={styles.hint}>
-          <p style={{ color: '#94a3b8', fontSize: 13 }}>기본 계정: professor / secret</p>
-          <p style={{ color: '#f59e0b', fontSize: 12, marginTop: 4 }}>관리자: admin / admin123123</p>
-          <div style={{ marginTop: 12, borderTop: '1px solid #f1f5f9', paddingTop: 12 }}>
-            <span style={{ color: '#94a3b8', fontSize: 13 }}>처음 사용하시나요? </span>
-            <a href="/register" style={{ color: '#000000ff', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
-              회원가입
-            </a>
-          </div>
+          <span style={{ color: '#94a3b8', fontSize: 13 }}>처음 사용하시나요? </span>
+          <a href="/register" style={{ color: '#000000ff', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
+            회원가입
+          </a>
         </div>
       </div>
     </div>
@@ -84,7 +80,7 @@ export default function LoginPage() {
 const styles = {
   container: {
     minHeight: '100vh', display: 'flex', alignItems: 'center',
-    justifyContent: 'center', background: 'linear-gradient(135deg, #c1fffaff 0%, #f0f9ff 100%)'
+    justifyContent: 'center', background: '#f8fafc'
   },
   card: {
     background: '#fff', borderRadius: 16, padding: '48px 40px',

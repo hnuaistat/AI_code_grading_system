@@ -9,9 +9,10 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Set
 
+import time
 from fastapi import (
     FastAPI, Depends, HTTPException, status, UploadFile, File,
-    Form, BackgroundTasks, Body
+    Form, BackgroundTasks, Body, Request
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -42,9 +43,15 @@ from services.llm_service import APIQuotaError, generate_rubric_with_ai, decompo
 
 app = FastAPI(title="Jupyter Notebook 자동 채점 시스템", version="2.0.0")
 
+# CORS: FRONTEND_URL이 설정되면 해당 도메인 + 로컬 개발 서버만 허용
+# 미설정 시 기존 동작(전체 허용) 유지 — 배포 환경변수에 FRONTEND_URL 설정 권장
+_frontend_url = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+_allowed_origins = (
+    sorted({_frontend_url, "http://localhost:3000"}) if _frontend_url else ["*"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,30 +71,34 @@ def seed_database():
     """Create default users and subjects if they don't exist."""
     db = SessionLocal()
     try:
+        # 보안: 시드 비밀번호는 코드에 하드코딩하지 않고 환경변수에서 읽는다.
+        # 환경변수가 없으면 해당 계정은 생성하지 않음 (기존 DB의 계정은 영향 없음)
         seed_users = [
             {
                 "username": "admin",
                 "email": "admin@univ.ac.kr",
-                "password": "admin123123",
+                "password": os.getenv("SEED_ADMIN_PASSWORD", ""),
                 "role": "admin",
                 "subjects": [],
             },
             {
                 "username": "professor",
                 "email": "professor@univ.ac.kr",
-                "password": "secret",
+                "password": os.getenv("SEED_PROFESSOR_PASSWORD", ""),
                 "role": "professor",
                 "subjects": [("알고리즘", "CS101"), ("자료구조", "CS102")],
             },
             {
                 "username": "prof_kim",
                 "email": "kim.prof@univ.ac.kr",
-                "password": "Kim2024#",
+                "password": os.getenv("SEED_PROF_KIM_PASSWORD", ""),
                 "role": "professor",
                 "subjects": [("데이터베이스", "DB201"), ("운영체제", "OS202")],
             },
         ]
         for u in seed_users:
+            if not u["password"]:
+                continue
             existing = db.query(models.User).filter(models.User.username == u["username"]).first()
             if not existing:
                 user = models.User(
@@ -159,7 +170,7 @@ async def health():
 
 
 @app.get("/debug/openai-test")
-async def debug_openai_test():
+async def debug_openai_test(admin=Depends(require_admin)):
     import httpx
     api_key = os.getenv("OPENAI_API_KEY", "")
     base_url = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
@@ -183,15 +194,39 @@ async def debug_openai_test():
 
 # ─── Auth ──────────────────────────────────────────────────────────────────────
 
+# 로그인 무차별 대입 방지: (IP, 아이디)별 실패 5회 → 5분 잠금 (인메모리)
+_login_fails: Dict[str, Dict[str, float]] = {}
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_SECONDS = 300
+
+
 @app.post("/auth/login", response_model=Token)
-async def login(request: LoginRequest, db: Session = Depends(get_db)):
+async def login(request: LoginRequest, req: Request, db: Session = Depends(get_db)):
+    client_ip = req.client.host if req.client else "unknown"
+    fail_key = f"{client_ip}|{request.username}"
+    now = time.time()
+
+    rec = _login_fails.get(fail_key)
+    if rec and rec["count"] >= LOGIN_MAX_FAILS:
+        remaining = LOGIN_LOCK_SECONDS - (now - rec["last"])
+        if remaining > 0:
+            raise HTTPException(
+                status_code=429,
+                detail=f"로그인 시도가 너무 많습니다. {int(remaining // 60) + 1}분 후 다시 시도해주세요",
+            )
+        del _login_fails[fail_key]  # 잠금 시간 경과 → 초기화
+
     user = authenticate_user(db, request.username, request.password)
     if not user:
+        rec = _login_fails.setdefault(fail_key, {"count": 0, "last": now})
+        rec["count"] += 1
+        rec["last"] = now
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="아이디 또는 비밀번호가 올바르지 않습니다",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    _login_fails.pop(fail_key, None)  # 성공 시 실패 기록 초기화
     token = create_access_token(
         data={"sub": user.username},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -2250,6 +2285,9 @@ async def admin_db_query(
                     val = val.isoformat()
                 elif val is not None and not isinstance(val, (str, int, float, bool, list, dict)):
                     val = str(val)
+                # 보안: 비밀번호 해시 등 민감 컬럼은 마스킹
+                if val is not None and any(word in col.lower() for word in ("password", "token", "secret")):
+                    val = "***"
                 row_dict[col] = val
             data.append(row_dict)
         return {
