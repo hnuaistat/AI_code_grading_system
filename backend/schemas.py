@@ -20,6 +20,27 @@ class RegisterRequest(BaseModel):
     username: str
     email: str
     password: str
+    name: str
+    role: str = "professor"          # 1단계 가입 유형: professor | ta
+    school: Optional[str] = None      # 선택
+    department: Optional[str] = None  # 선택
+    phone: Optional[str] = None       # 선택 — 알림 수신 동의 시에만 저장
+
+    # 2단계 약관 동의 (필수 2 / 선택 1)
+    agree_terms: bool = False
+    agree_privacy: bool = False
+    agree_notify: bool = False
+
+
+class ProfileCompleteRequest(BaseModel):
+    """기존 계정용 프로필 보완 — 팝업에서 이름 + 미동의 약관을 함께 받는다."""
+    name: str
+    school: Optional[str] = None
+    department: Optional[str] = None
+    phone: Optional[str] = None
+    agree_terms: bool = False
+    agree_privacy: bool = False
+    agree_notify: bool = False
 
 
 class UpdateEmailRequest(BaseModel):

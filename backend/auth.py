@@ -69,7 +69,16 @@ async def get_current_user(
     user = db.query(models.User).filter(models.User.username == token_data.username).first()
     if user is None:
         raise credentials_exception
-    return {"id": user.id, "username": user.username, "email": user.email, "role": user.role}
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "role": user.role,
+        "name": user.name,
+        "school": user.school,
+        "department": user.department,
+        "phone": user.phone,
+    }
 
 
 async def require_admin(current_user=Depends(get_current_user)):

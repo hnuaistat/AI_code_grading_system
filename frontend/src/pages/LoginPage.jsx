@@ -22,7 +22,7 @@ export default function LoginPage() {
       localStorage.setItem('token', token);
       const meRes = await authAPI.me();
       login(token, meRes.data);
-      navigate(meRes.data.role === 'admin' ? '/admin' : '/upload');
+      navigate(meRes.data.role === 'admin' ? '/admin' : '/home');
     } catch (err) {
       setError(err.response?.data?.detail || '로그인에 실패했습니다');
     } finally {

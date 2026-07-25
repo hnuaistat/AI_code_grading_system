@@ -8,3 +8,98 @@ body {
   word-break: keep-all;
   overflow-wrap: break-word;
 }
+
+/* 로딩 스피너 (인라인 style에서 animation: 'spin 0.8s linear infinite'로 사용) */
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─────────────────────────────────────────────
+   회원가입·프로필 보완 폼의 hover/focus 상태.
+   인라인 style로는 의사클래스를 표현할 수 없어 클래스로만 둔다.
+   ───────────────────────────────────────────── */
+
+/* 키보드 포커스 공통 링 (마우스 클릭 시에는 표시하지 않음) */
+.auth-focusable:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+/* 가입 유형 선택 카드 */
+.auth-role-card {
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.auth-role-card:hover {
+  border-color: #2563eb;
+  background: #f8fafc;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.10);
+}
+
+/* 체크박스를 포함한 동의 항목 행 */
+.auth-agree-row {
+  transition: border-color 0.15s, background 0.15s;
+}
+.auth-agree-row:hover {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+}
+.auth-agree-toggle {
+  transition: color 0.15s;
+}
+.auth-agree-toggle:hover .auth-checkbox {
+  border-color: #2563eb;
+}
+
+/* 입력 필드 */
+.auth-input {
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.auth-input:hover {
+  border-color: #cbd5e1;
+}
+.auth-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+/* 버튼 */
+.auth-button {
+  transition: background 0.15s;
+}
+.auth-button:hover:not(:disabled) { background: #1d4ed8; }
+.auth-button:disabled { cursor: not-allowed; }
+
+.auth-ghost-button {
+  transition: background 0.15s, border-color 0.15s;
+}
+.auth-ghost-button:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+.auth-ghost-button:disabled { cursor: not-allowed; opacity: 0.6; }
+
+.auth-text-button {
+  transition: background 0.15s;
+}
+.auth-text-button:hover { background: #eff6ff; }
+
+/* 약관 본문 스크롤 박스 — 스크롤 가능함을 스크롤바로 드러낸다 */
+.auth-terms-body {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+.auth-terms-body::-webkit-scrollbar { width: 8px; }
+.auth-terms-body::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+.auth-terms-body::-webkit-scrollbar-track { background: transparent; }
+
+/* 조건부로 나타나는 필드 — 갑자기 튀어나오지 않도록 */
+@keyframes authFieldIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.auth-reveal { animation: authFieldIn 0.18s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-reveal { animation: none; }
+}

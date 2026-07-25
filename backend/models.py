@@ -14,6 +14,21 @@ class User(Base):
     role = Column(String(20), default="professor")
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # 프로필 — 기존 계정 호환을 위해 nullable. 전원 입력 완료 후 NOT NULL 전환 가능
+    name = Column(String(50), nullable=True)
+    school = Column(String(100), nullable=True)
+    department = Column(String(100), nullable=True)
+    phone = Column(String(20), nullable=True)
+
+    # 동의 이력 — 분쟁 시 동의 사실 입증 책임이 운영자에게 있으므로 시각을 남긴다.
+    # NULL = 미동의. notify는 선택 항목이라 NULL이 정상 상태
+    terms_agreed_at = Column(DateTime, nullable=True)
+    privacy_agreed_at = Column(DateTime, nullable=True)
+    notify_agreed_at = Column(DateTime, nullable=True)
+
+    # 프로필 보완 팝업 "나중에 하기" 시각. 7일 경과 시 재노출
+    profile_prompt_dismissed_at = Column(DateTime, nullable=True)
+
     subjects = relationship("Subject", back_populates="owner", cascade="all, delete-orphan")
     sessions = relationship("GradingSessionDB", back_populates="user")
 

@@ -28,7 +28,8 @@ from auth import (
     get_password_hash, verify_password, ACCESS_TOKEN_EXPIRE_MINUTES, require_admin
 )
 from schemas import (
-    Token, LoginRequest, RegisterRequest, GradingCriteria, GradingSession,
+    Token, LoginRequest, RegisterRequest, ProfileCompleteRequest,
+    GradingCriteria, GradingSession,
     StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem, SubjectItemCreate,
     ProblemRevisionRequest, RevisionLogItem, SubjectUpdate, SubjectItemUpdate,
     DecomposeRequest, SessionSubjectItemUpdate, RegradeRequest,
@@ -139,6 +140,15 @@ def _migrate_add_columns():
         ("grading_sessions_db", "criteria_json", "TEXT"),
         ("grading_sessions_db", "answer_problems_json", "TEXT"),
         ("grading_sessions_db", "regraded_from", "VARCHAR(36)"),
+        # 프로필·동의 — 기존 계정은 NULL로 남고 로그인 후 보완 팝업으로 채운다
+        ("users", "name", "VARCHAR(50)"),
+        ("users", "school", "VARCHAR(100)"),
+        ("users", "department", "VARCHAR(100)"),
+        ("users", "phone", "VARCHAR(20)"),
+        ("users", "terms_agreed_at", "TIMESTAMP"),
+        ("users", "privacy_agreed_at", "TIMESTAMP"),
+        ("users", "notify_agreed_at", "TIMESTAMP"),
+        ("users", "profile_prompt_dismissed_at", "TIMESTAMP"),
     ]
     with engine.begin() as conn:
         for table_name, col_name, col_type in migrations:
@@ -234,6 +244,23 @@ async def login(request: LoginRequest, req: Request, db: Session = Depends(get_d
     return Token(access_token=token, token_type="bearer")
 
 
+SIGNUP_ROLES = {"professor", "ta"}
+
+
+def _normalize_phone(phone: Optional[str]) -> Optional[str]:
+    """숫자만 남겨 010-1234-5678 형태로 정규화. 빈 값이면 None."""
+    if not phone:
+        return None
+    digits = re.sub(r"\D", "", phone)
+    if not digits:
+        return None
+    if not (10 <= len(digits) <= 11):
+        raise HTTPException(status_code=400, detail="올바른 전화번호 형식이 아닙니다")
+    if len(digits) == 11:
+        return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+    return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+
+
 @app.post("/auth/register")
 async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(models.User).filter(models.User.username == request.username).first():
@@ -243,16 +270,118 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     if len(request.password) < 6:
         raise HTTPException(status_code=400, detail="비밀번호는 6자 이상이어야 합니다")
 
+    name = (request.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="이름을 입력해주세요")
+
+    role = request.role if request.role in SIGNUP_ROLES else "professor"
+
+    # 필수 동의 없이는 가입 불가 (개인정보보호법 제15조)
+    if not (request.agree_terms and request.agree_privacy):
+        raise HTTPException(status_code=400, detail="필수 약관에 동의해주세요")
+
+    # 알림 미동의 시 전화번호는 수집하지 않는다 (수집 근거가 없음)
+    phone = _normalize_phone(request.phone) if request.agree_notify else None
+
+    now = datetime.utcnow()
     user = models.User(
         username=request.username,
         email=request.email,
         hashed_password=get_password_hash(request.password),
-        role="professor",
+        role=role,
+        name=name,
+        school=(request.school or "").strip() or None,
+        department=(request.department or "").strip() or None,
+        phone=phone,
+        terms_agreed_at=now,
+        privacy_agreed_at=now,
+        notify_agreed_at=now if request.agree_notify else None,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
     return {"message": "회원가입이 완료되었습니다", "username": user.username}
+
+
+PROFILE_PROMPT_INTERVAL_DAYS = 7
+
+
+@app.get("/auth/profile-status")
+async def profile_status(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """기존 계정 프로필 보완 팝업 노출 여부.
+
+    이름 또는 필수 동의 이력이 없으면 대상. '나중에 하기' 후 7일간은 다시 띄우지 않는다.
+    """
+    user = db.query(models.User).filter(models.User.id == current_user["id"]).first()
+    needs_name = not (user.name or "").strip()
+    needs_consent = user.terms_agreed_at is None or user.privacy_agreed_at is None
+
+    should_prompt = needs_name or needs_consent
+    if should_prompt and user.profile_prompt_dismissed_at:
+        elapsed = datetime.utcnow() - user.profile_prompt_dismissed_at
+        if elapsed < timedelta(days=PROFILE_PROMPT_INTERVAL_DAYS):
+            should_prompt = False
+
+    return {
+        "should_prompt": should_prompt,
+        "needs_name": needs_name,
+        "needs_consent": needs_consent,
+    }
+
+
+@app.post("/auth/complete-profile")
+async def complete_profile(
+    request: ProfileCompleteRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """기존 계정의 이름·동의 보완. 이미 동의한 항목의 시각은 덮어쓰지 않는다."""
+    user = db.query(models.User).filter(models.User.id == current_user["id"]).first()
+
+    name = (request.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="이름을 입력해주세요")
+
+    needs_consent = user.terms_agreed_at is None or user.privacy_agreed_at is None
+    if needs_consent and not (request.agree_terms and request.agree_privacy):
+        raise HTTPException(status_code=400, detail="필수 약관에 동의해주세요")
+
+    now = datetime.utcnow()
+    user.name = name
+    if request.school is not None:
+        user.school = request.school.strip() or None
+    if request.department is not None:
+        user.department = request.department.strip() or None
+
+    if request.agree_terms and user.terms_agreed_at is None:
+        user.terms_agreed_at = now
+    if request.agree_privacy and user.privacy_agreed_at is None:
+        user.privacy_agreed_at = now
+
+    if request.agree_notify:
+        user.phone = _normalize_phone(request.phone)
+        if user.notify_agreed_at is None:
+            user.notify_agreed_at = now
+    elif request.phone is not None:
+        # 알림 동의를 철회하면 수집 근거가 사라지므로 전화번호도 파기
+        user.phone = None
+        user.notify_agreed_at = None
+
+    user.profile_prompt_dismissed_at = None
+    db.commit()
+    return {"message": "프로필이 저장되었습니다", "name": user.name}
+
+
+@app.post("/auth/dismiss-profile-prompt")
+async def dismiss_profile_prompt(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """'나중에 하기' — 7일 뒤 다시 노출된다."""
+    user = db.query(models.User).filter(models.User.id == current_user["id"]).first()
+    user.profile_prompt_dismissed_at = datetime.utcnow()
+    db.commit()
+    return {"message": "다음에 다시 안내해드릴게요"}
 
 
 @app.get("/auth/me")
@@ -1184,6 +1313,148 @@ async def get_history(
             "completed_at": _to_kst(r.completed_at) if r.completed_at else None,
         })
     return result
+
+
+def _summarize_results(results_json: Optional[str]) -> dict:
+    """results_json에서 점수 집계를 뽑는다. 파싱 불가/빈 결과면 점수 필드는 None."""
+    empty = {
+        "avg_score": None, "avg_pct": None,
+        "max_score": None, "min_score": None,
+        "max_total_score": None, "graded_students": 0,
+    }
+    if not results_json:
+        return empty
+    try:
+        results = json.loads(results_json)
+    except (ValueError, TypeError):
+        return empty
+    if not isinstance(results, list) or not results:
+        return empty
+
+    totals, pcts, fulls = [], [], []
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        score = r.get("total_score")
+        if score is None:
+            continue
+        totals.append(score)
+        # 만점은 학생별 값을 사용한다 (첫 학생 것으로 단정하지 않음)
+        full = r.get("max_total_score")
+        if full:
+            fulls.append(full)
+            pcts.append(score / full * 100)
+
+    if not totals:
+        return empty
+
+    return {
+        "avg_score": round(sum(totals) / len(totals), 2),
+        "avg_pct": round(sum(pcts) / len(pcts), 1) if pcts else None,
+        "max_score": round(max(totals), 2),
+        "min_score": round(min(totals), 2),
+        "max_total_score": max(fulls) if fulls else None,
+        "graded_students": len(totals),
+    }
+
+
+@app.get("/dashboard/summary")
+async def get_dashboard_summary(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """홈 대시보드용 집계.
+
+    /grading/history와 동일한 소유권 범위를 쓰되, 세션별 점수 집계와
+    수정 로그 건수를 함께 내려준다. 목록 API는 results_json을 주지 않으므로
+    프론트에서 세션마다 조회하면 N+1이 되기 때문에 여기서 한 번에 계산한다.
+    """
+    from services.llm_service import AVAILABLE_MODELS
+    model_label_map = {m["id"]: m["label"] for m in AVAILABLE_MODELS}
+
+    records = (
+        db.query(models.GradingSessionDB)
+        .filter(models.GradingSessionDB.user_id == current_user["id"])
+        .order_by(models.GradingSessionDB.created_at.desc())
+        .all()
+    )
+    session_ids = [r.id for r in records]
+
+    # 세부 항목 이름 — 세션마다 쿼리하지 않고 한 번에 읽어 매핑
+    item_name_map = {}
+    item_ids = {r.subject_item_id for r in records if r.subject_item_id}
+    if item_ids:
+        for item in db.query(models.SubjectItem).filter(
+            models.SubjectItem.id.in_(item_ids)
+        ).all():
+            item_name_map[item.id] = item.name
+
+    # 수정 로그 건수 — group_by 한 번으로 집계 (N+1 방지)
+    revision_count_map = {}
+    revisions_30d = 0
+    if session_ids:
+        from sqlalchemy import func
+        rows = (
+            db.query(
+                models.ProblemRevisionLog.session_id,
+                func.count(models.ProblemRevisionLog.id),
+            )
+            .filter(models.ProblemRevisionLog.session_id.in_(session_ids))
+            .group_by(models.ProblemRevisionLog.session_id)
+            .all()
+        )
+        revision_count_map = {sid: cnt for sid, cnt in rows}
+
+        cutoff = datetime.utcnow() - timedelta(days=30)
+        revisions_30d = (
+            db.query(func.count(models.ProblemRevisionLog.id))
+            .filter(
+                models.ProblemRevisionLog.session_id.in_(session_ids),
+                models.ProblemRevisionLog.revised_at >= cutoff,
+            )
+            .scalar()
+        ) or 0
+
+    sessions = []
+    for r in records:
+        # 완료된 세션만 점수를 집계한다 (진행 중이면 부분 결과라 평균이 왜곡됨)
+        scores = (
+            _summarize_results(r.results_json)
+            if r.status == "completed"
+            else _summarize_results(None)
+        )
+        sessions.append({
+            "session_id": r.id,
+            "subject_id": r.subject_id,
+            "subject_name": r.subject.name if r.subject else None,
+            "subject_code": r.subject.code if r.subject else None,
+            "subject_item_id": r.subject_item_id,
+            "subject_item_name": item_name_map.get(r.subject_item_id),
+            "status": r.status,
+            "progress": r.progress,
+            "total_students": r.total_students,
+            "processed_students": r.processed_students,
+            "grading_model": r.grading_model,
+            "grading_model_label": model_label_map.get(r.grading_model, r.grading_model),
+            "regraded_from": r.regraded_from,
+            "can_regrade": bool(r.criteria_json and r.answer_problems_json and r.results_json),
+            "revision_count": revision_count_map.get(r.id, 0),
+            "created_at": _to_kst(r.created_at),
+            "completed_at": _to_kst(r.completed_at) if r.completed_at else None,
+            **scores,
+        })
+
+    return {
+        "sessions": sessions,
+        "totals": {
+            "total_sessions": len(records),
+            "completed_sessions": sum(1 for r in records if r.status == "completed"),
+            "running_sessions": sum(1 for r in records if r.status == "running"),
+            "failed_sessions": sum(1 for r in records if r.status == "failed"),
+            "total_students_graded": sum(s["graded_students"] for s in sessions),
+            "revisions_30d": revisions_30d,
+        },
+    }
 
 
 @app.patch("/grading/session/{session_id}/subject-item")
