@@ -1,57 +1,86 @@
 import React, { useMemo } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  Cell, ReferenceLine, ComposedChart, Scatter, ScatterChart, ZAxis,
-  LabelList,
+  Cell, LabelList, ReferenceArea,
 } from 'recharts';
 
 /* ── Data computation helpers ── */
 function computeStats(scores) {
-  if (!scores.length) return { min: 0, q1: 0, median: 0, q3: 0, max: 0, avg: 0, std: 0 };
+  if (!scores.length) return { min: 0, median: 0, max: 0, avg: 0, std: 0 };
   const s = [...scores].sort((a, b) => a - b);
   const n = s.length;
   const avg = s.reduce((a, b) => a + b, 0) / n;
   const std = Math.sqrt(s.reduce((a, b) => a + (b - avg) ** 2, 0) / n);
   return {
     min: parseFloat(s[0].toFixed(2)), max: parseFloat(s[n - 1].toFixed(2)),
-    q1: parseFloat(s[Math.floor(n * 0.25)].toFixed(2)),
     median: parseFloat(s[Math.floor(n * 0.5)].toFixed(2)),
-    q3: parseFloat(s[Math.floor(n * 0.75)].toFixed(2)),
     avg: parseFloat(avg.toFixed(2)),
     std: parseFloat(std.toFixed(2)),
   };
 }
 
-/* 100점 환산 점수 기준 고정 10점 구간 히스토그램 (원점수 범위 병기) */
-function computeHistogram(pctScores, maxScore) {
+/* 100점 환산 점수 기준 고정 10점 구간 히스토그램 */
+function computeHistogram(pctScores) {
   if (!pctScores.length) return [];
-  const fmt = v => parseFloat(v.toFixed(1));
   const bins = [];
   for (let lo = 0; lo < 100; lo += 10) {
     const hi = lo + 10;
     bins.push({
       range: `${lo}~${hi}`,
-      rawRange: `${fmt(lo / 100 * maxScore)}~${fmt(hi / 100 * maxScore)}점`,
+      label: `${lo}~${hi}`,
       count: pctScores.filter(s => s >= lo && (hi === 100 ? s <= hi : s < hi)).length,
     });
   }
   return bins;
 }
 
-/* ── Custom tooltip ── */
-const CustomTooltip = ({ active, payload, label, suffix = '' }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', fontSize: 13, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
-      <p style={{ fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>{label}</p>
-      {payload.map((p, i) => (
-        <p key={i} style={{ color: p.color || '#374151', margin: '2px 0' }}>
-          {p.name}: <strong>{p.value}{suffix}</strong>
-        </p>
-      ))}
-    </div>
-  );
-};
+/* 원점수 구간 폭 후보 — 만점에 따라 경계가 항상 정수로 떨어지도록 한다.
+   구간 수가 6~14개가 되는 폭만 남기고, 없으면 전체 후보를 그대로 쓴다. */
+const BIN_WIDTHS = [1, 2, 3, 5, 10, 20, 25];
+
+function binWidthOptions(maxScore) {
+  if (!maxScore || maxScore <= 0) return [1];
+  const usable = BIN_WIDTHS.filter(w => {
+    const n = Math.ceil(maxScore / w);
+    return n >= 4 && n <= 20;
+  });
+  return usable.length ? usable : [Math.max(1, Math.round(maxScore / 10))];
+}
+
+/* 만점에 가장 알맞은 기본 폭 — 구간 수가 10개에 가장 가까운 것 */
+function defaultBinWidth(maxScore) {
+  const opts = binWidthOptions(maxScore);
+  return opts.reduce((best, w) =>
+    Math.abs(Math.ceil(maxScore / w) - 10) < Math.abs(Math.ceil(maxScore / best) - 10) ? w : best,
+    opts[0]);
+}
+
+/* 원점수 기준 히스토그램 — 경계가 정수(또는 지정 폭 배수)로 떨어진다.
+   마지막 구간은 만점을 넘지 않도록 라벨을 잘라 표시한다. */
+function computeRawHistogram(rawScores, maxScore, width) {
+  if (!rawScores.length || !width) return [];
+  const fmt = v => parseFloat(v.toFixed(2));
+  const bins = [];
+  for (let lo = 0; lo < maxScore; lo += width) {
+    const hi = lo + width;
+    const shownHi = Math.min(hi, maxScore);
+    const isLast = hi >= maxScore;
+    bins.push({
+      range: `${fmt(lo)}~${fmt(shownHi)}`,
+      label: `${fmt(lo)}~${fmt(shownHi)}`,
+      pctRange: maxScore
+        ? `${Math.round(lo / maxScore * 100)}~${Math.round(shownHi / maxScore * 100)}%`
+        : '',
+      count: rawScores.filter(s => s >= lo && (isLast ? s <= hi : s < hi)).length,
+    });
+  }
+  return bins;
+}
+
+/* 문항 강조 색 — 이 시험 안에서 가장 어려운/쉬운 문항만 배경 영역을 연하게 칠한다.
+   막대(평균 점수)는 항상 회색 — 평균이 낮은 문항은 막대가 작아 색이 보이지 않기 때문. */
+const HARD = '#dc2626', EASY = '#059669', MID = '#64748b';
+const HARD_BG = '#fee2e2', EASY_BG = '#dcfce7', MID_BG = '#f1f5f9';
 
 /* ── Summary card mini graphs (장식용) ── */
 const CardSpark = ({ type, color }) => {
@@ -83,32 +112,6 @@ const CardSpark = ({ type, color }) => {
   );
 };
 
-/* ── Box Plot (custom SVG via ScatterChart trick) ── */
-const BoxPlotShape = (props) => {
-  const { cx, cy, payload, yAxisScale, boxHalfW = 28 } = props;
-  if (!payload || !yAxisScale) return null;
-  const { min, q1, median, q3, max } = payload;
-  const y = (v) => yAxisScale(v);
-  const yMin = y(min), yQ1 = y(q1), yMed = y(median), yQ3 = y(q3), yMax = y(max);
-  return (
-    <g>
-      {/* whisker lines */}
-      <line x1={cx} y1={yMin} x2={cx} y2={yQ3} stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="3,2" />
-      <line x1={cx} y1={yQ1} x2={cx} y2={yMax} stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="3,2" />
-      {/* min/max caps */}
-      <line x1={cx - boxHalfW * 0.5} y1={yMin} x2={cx + boxHalfW * 0.5} y2={yMin} stroke="#64748b" strokeWidth={2} />
-      <line x1={cx - boxHalfW * 0.5} y1={yMax} x2={cx + boxHalfW * 0.5} y2={yMax} stroke="#64748b" strokeWidth={2} />
-      {/* IQR box */}
-      <rect x={cx - boxHalfW} y={yQ3} width={boxHalfW * 2} height={yQ1 - yQ3}
-        fill="#bfdbfe" stroke="#2563eb" strokeWidth={1.5} rx={3} />
-      {/* median */}
-      <line x1={cx - boxHalfW} y1={yMed} x2={cx + boxHalfW} y2={yMed} stroke="#1d4ed8" strokeWidth={2.5} />
-      {/* avg dot */}
-      <circle cx={cx} cy={y(payload.avg)} r={4} fill="#f59e0b" stroke="#fff" strokeWidth={1.5} />
-    </g>
-  );
-};
-
 /* ── Main component ── */
 export default function StatsDashboard({ results, onClose }) {
   // 'pct' = 100점 환산, 'raw' = 원점수 — 기본값은 설정 페이지에서 지정 가능
@@ -119,80 +122,96 @@ export default function StatsDashboard({ results, onClose }) {
   const data = useMemo(() => {
     const maxScore = results[0]?.max_total_score || 100;
     const totalScores = results.map(r => r.total_score);
-    const pctScores = totalScores.map(s => s / maxScore * 100);
+    const pctScores = results.map(r => (r.max_total_score ? r.total_score / r.max_total_score * 100 : 0));
     const allProblemIds = [...new Set(results.flatMap(r => r.problems.map(p => p.problem_id)))].sort();
 
-    /* Histogram (100점 환산 기준) */
-    const histData = computeHistogram(pctScores, maxScore);
+    /* Histogram (100점 환산 기준 — 고정 10점 구간) */
+    const histData = computeHistogram(pctScores);
+    /* 원점수 구간 폭 후보 (교수님이 선택 가능) */
+    const widthOptions = binWidthOptions(maxScore);
 
-    /* Problem averages (득점률 기준) */
+    /* 문항별 평균 점수 — 원래 문항 순서 유지, 색상은 배점 대비 비율(pct)로 결정 */
     const problemData = allProblemIds.map(pid => {
-      const rows = results.map(r => r.problems.find(p => p.problem_id === pid)).filter(Boolean);
+      const rows = results
+        .map(r => r.problems.find(p => p.problem_id === pid))
+        .filter(Boolean);
+      const scored = rows.filter(p => p.full_score > 0);
       const full = rows[0]?.full_score || 0;
-      const avg = rows.reduce((s, p) => s + p.obtained_score, 0) / (rows.length || 1);
-      const pct = full > 0 ? parseFloat((avg / full * 100).toFixed(1)) : 0;
+      const pct = scored.length
+        ? parseFloat((scored.reduce((s, p) => s + p.obtained_score / p.full_score, 0) / scored.length * 100).toFixed(1))
+        : 0;
+      const avg = rows.length
+        ? parseFloat((rows.reduce((s, p) => s + p.obtained_score, 0) / rows.length).toFixed(2))
+        : 0;
       return {
-        name: `문제 ${pid}`, label: `문제 ${pid} (${full}점)`,
-        avg: parseFloat(avg.toFixed(2)), full, pct,
+        name: `문제 ${pid}`,
+        label: `문제 ${pid} (${full}점)`,
+        avg, full, pct, n: rows.length,
       };
     });
 
-    /* Most missed criteria */
-    const criteriaMap = {};
-    results.forEach(r => r.problems.forEach(p => p.partial_scores.forEach(ps => {
-      if (!criteriaMap[ps.item]) criteriaMap[ps.item] = { obtained: 0, max: 0 };
-      criteriaMap[ps.item].obtained += ps.score;
-      criteriaMap[ps.item].max += ps.max_score;
-    })));
-    const criteriaData = Object.entries(criteriaMap)
-      .map(([item, v]) => ({
-        item: item.length > 10 ? item.slice(0, 10) + '…' : item,
-        fullItem: item,
-        rate: v.max > 0 ? parseFloat((v.obtained / v.max * 100).toFixed(2)) : 0,
-      }))
-      .sort((a, b) => a.rate - b.rate)
-      .slice(0, 8);
-
-    /* Per-problem box plot data (배점 대비 % 정규화) */
-    const boxData = allProblemIds.map(pid => {
-      const rawFull = results[0]?.problems.find(p => p.problem_id === pid)?.full_score || 0;
-      const pctList = results
-        .map(r => {
-          const p = r.problems.find(p => p.problem_id === pid);
-          if (!p || !p.full_score) return null;
-          return p.obtained_score / p.full_score * 100;
-        })
-        .filter(s => s !== null);
-      return { name: `문제 ${pid} (${rawFull}점)`, full: 100, ...computeStats(pctList) };
+    /* 학생별 요약 — 상위/하위 테이블용 */
+    const perStudent = results.map(r => {
+      const probs = r.problems.filter(p => p.full_score > 0);
+      const zeroIds = probs.filter(p => p.obtained_score <= 0).map(p => p.problem_id);
+      const perfect = probs.filter(p => p.obtained_score >= p.full_score).length;
+      const weakest = probs.length
+        ? probs.reduce((a, b) =>
+            (b.obtained_score / b.full_score) < (a.obtained_score / a.full_score) ? b : a)
+        : null;
+      return {
+        name: r.student_name || r.student_id || r.filename || '(이름 없음)',
+        total: r.total_score,
+        pct: r.max_total_score ? r.total_score / r.max_total_score * 100 : 0,
+        maxTotal: r.max_total_score || 0,
+        zeroIds, perfect, totalProbs: probs.length,
+        weakestId: weakest?.problem_id,
+      };
     });
+    const byScore = [...perStudent].sort((a, b) => a.total - b.total);
+    const N = Math.max(1, Math.min(3, Math.floor(results.length / 2)));
+    const bottomN = byScore.slice(0, N);
+    const topN = [...byScore].reverse().slice(0, N);
 
     /* Overall stats (100점 환산 / 원점수 둘 다 계산) */
     const pctStats = computeStats(pctScores);
     const rawStats = computeStats(totalScores);
 
-    /* Grade distribution — 100점 환산 점수 기준, 반올림 없이 경계 적용 */
-    const gradeData = [
-      { grade: 'A (90~100)', count: pctScores.filter(p => p >= 90).length, color: '#059669' },
-      { grade: 'B (80~89)', count: pctScores.filter(p => p >= 80 && p < 90).length, color: '#2563eb' },
-      { grade: 'C (70~79)', count: pctScores.filter(p => p >= 70 && p < 80).length, color: '#d97706' },
-      { grade: 'D (60~69)', count: pctScores.filter(p => p >= 60 && p < 70).length, color: '#ea580c' },
-      { grade: 'F (<60)', count: pctScores.filter(p => p < 60).length, color: '#dc2626' },
-    ];
-
     /* 그래프 하단 한 줄 해설용 인사이트 */
-    const topBin = histData.reduce((a, b) => (b.count > a.count ? b : a), histData[0]);
-    const topGrade = gradeData.reduce((a, b) => (b.count > a.count ? b : a), gradeData[0]);
-    const bestProb = problemData.reduce((a, b) => (b.pct > a.pct ? b : a), problemData[0]);
-    const worstProb = problemData.reduce((a, b) => (b.pct < a.pct ? b : a), problemData[0]);
+    const hardest = problemData.reduce((a, b) => (b.pct < a.pct ? b : a), problemData[0]);
+    const easiest = problemData.reduce((a, b) => (b.pct > a.pct ? b : a), problemData[0]);
+    /* 양극 강조용 색 — 문항이 2개 미만이거나 전부 동점이면 강조하지 않음 */
+    const distinct = hardest && easiest && hardest.pct !== easiest.pct;
+    problemData.forEach(p => {
+      const kind = !distinct ? 'mid'
+        : p.pct === hardest.pct ? 'hard'
+        : p.pct === easiest.pct ? 'easy' : 'mid';
+      p.kind = kind;
+      p.tone = kind === 'hard' ? HARD : kind === 'easy' ? EASY : MID;
+      p.bg = kind === 'hard' ? HARD_BG : kind === 'easy' ? EASY_BG : MID_BG;
+    });
 
     return {
-      maxScore, histData, problemData, criteriaData, boxData, pctStats, rawStats, gradeData, allProblemIds,
-      topBin, topGrade, bestProb, worstProb,
+      maxScore, histData, problemData, pctStats, rawStats, allProblemIds,
+      totalScores, widthOptions, hardest, easiest, bottomN, topN, N,
     };
   }, [results]);
 
+  /* 원점수 히스토그램 구간 폭 — 자동 계산값을 기본으로, 교수님이 바꿀 수 있다 */
+  const [binWidth, setBinWidth] = React.useState(() => defaultBinWidth(data.maxScore));
+  React.useEffect(() => {
+    setBinWidth(defaultBinWidth(data.maxScore));
+  }, [data.maxScore]);
+
   const isPct = scale === 'pct';
+  const rawHistData = useMemo(
+    () => computeRawHistogram(data.totalScores, data.maxScore, binWidth),
+    [data.totalScores, data.maxScore, binWidth]
+  );
+  const shownHist = isPct ? data.histData : rawHistData;
+  const topBin = shownHist.reduce((a, b) => (b.count > a.count ? b : a), shownHist[0]);
   const shownStats = isPct ? data.pctStats : data.rawStats;
+  const fmtScore = st => (isPct ? `${st.pct.toFixed(1)}점` : `${st.total.toFixed(1)}점`);
 
   const n = results.length;
 
@@ -205,8 +224,8 @@ export default function StatsDashboard({ results, onClose }) {
             <h2 style={s.title}>📊 통계 대시보드</h2>
             <p style={s.sub}>
               {isPct
-                ? `ⓘ ${data.maxScore}점 만점 기준 점수를 100점 만점으로 환산하여 표시 · 총 ${n}명(미제출·결시 학생 제외)`
-                : `ⓘ 원점수(${data.maxScore}점 만점) 기준으로 표시 · 총 ${n}명(미제출·결시 학생 제외)`}
+                ? `ⓘ ${data.maxScore}점 만점 기준 점수를 100점 만점으로 환산하여 표시 · 총 ${n}명(0점·미제출 포함)`
+                : `ⓘ 원점수(${data.maxScore}점 만점) 기준으로 표시 · 총 ${n}명(0점·미제출 포함)`}
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -225,7 +244,7 @@ export default function StatsDashboard({ results, onClose }) {
         <div style={s.body}>
           {n < 10 && (
             <div style={s.warnBanner}>
-              ⚠️ 표본이 10명 미만입니다. 사분위수·등급 분포 등 분포 통계의 신뢰도가 낮을 수 있습니다.
+              ⚠️ 표본이 10명 미만입니다. 평균·표준편차 등 분포 통계의 신뢰도가 낮을 수 있습니다.
             </div>
           )}
 
@@ -247,204 +266,207 @@ export default function StatsDashboard({ results, onClose }) {
             ))}
           </div>
 
-          {/* Row 1: Histogram + Grade dist */}
-          <div style={s.row}>
-            <div style={s.chartCard}>
-              <h3 style={s.chartTitle}>{isPct ? '100점 환산 점수 분포' : '원점수 분포'}</h3>
-              <p style={s.chartDesc}>{isPct ? '10점 간격 구간별 학생 수 (명)' : `원점수 구간별 학생 수 (만점 ${data.maxScore}점, 10% 간격)`}</p>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={data.histData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey={isPct ? 'range' : 'rawRange'} tick={{ fontSize: isPct ? 12 : 10 }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                  <Tooltip
-                    content={({ active, payload, label }) => {
-                      if (!active || !payload?.length) return null;
-                      const d = payload[0].payload;
-                      return (
-                        <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', fontSize: 13, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
-                          <p style={{ fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>
-                            {isPct ? `${label}점 (원점수 ${d.rawRange})` : `원점수 ${label} (환산 ${d.range}점)`}
-                          </p>
-                          <p style={{ color: '#2563eb', margin: '2px 0' }}>학생 수: <strong>{d.count}명</strong></p>
-                        </div>
-                      );
-                    }}
-                  />
-                  <Bar dataKey="count" name="학생 수" radius={[4, 4, 0, 0]}>
-                    {data.histData.map((entry, i) => (
-                      <Cell key={i} fill={entry.count === Math.max(...data.histData.map(d => d.count)) ? '#2563eb' : '#93c5fd'} />
-                    ))}
-                    <LabelList dataKey="count" position="top" style={{ fontSize: 12, fill: '#374151', fontWeight: 600 }} />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-              <p style={s.chartNote}>
-                ※ 점수가 {isPct ? `${data.topBin?.range}점` : `${data.topBin?.rawRange}(환산 ${data.topBin?.range}점)`} 구간에 가장 많이 분포되어 있습니다.
-              </p>
-            </div>
-
-            <div style={s.chartCard}>
-              <h3 style={s.chartTitle}>100점 환산 등급 분포</h3>
-              <p style={s.chartDesc}>비율 기준 등급별 학생 수 (총 {n}명)</p>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={data.gradeData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="grade" tick={{ fontSize: 11 }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                  <Tooltip content={<CustomTooltip suffix="명" />} />
-                  <Bar dataKey="count" name="학생 수" radius={[4, 4, 0, 0]}>
-                    {data.gradeData.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} />
-                    ))}
-                    <LabelList dataKey="count" position="top" style={{ fontSize: 12, fill: '#374151', fontWeight: 600 }} />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-              <p style={s.chartNote}>
-                ※ {data.topGrade?.grade} 등급이 {data.topGrade?.count}명으로 가장 많습니다. 등급은 100점 환산 점수 기준(반올림 없음)입니다.
-              </p>
-            </div>
-          </div>
-
-          {/* Row 2: Problem avg + Box plot */}
-          <div style={s.row}>
-            <div style={s.chartCard}>
-              <h3 style={s.chartTitle}>문항별 평균 득점률 (배점 보정)</h3>
-              <p style={s.chartDesc}>각 문항을 100점 기준으로 환산한 평균 득점률</p>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={data.problemData} margin={{ top: 16, right: 10, left: -10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                  <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 12 }} />
-                  <Tooltip
-                    content={({ active, payload }) => {
-                      if (!active || !payload?.length) return null;
-                      const d = payload[0].payload;
-                      return (
-                        <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', fontSize: 13, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
-                          <p style={{ fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>{d.name}</p>
-                          <p style={{ color: '#2563eb', margin: '2px 0' }}>평균 득점률: <strong>{d.pct}%</strong></p>
-                          <p style={{ color: '#64748b', margin: '2px 0' }}>평균 {d.avg}점 / 배점 {d.full}점</p>
-                        </div>
-                      );
-                    }}
-                  />
-                  <Bar dataKey="pct" name="평균 득점률" fill="#2563eb" radius={[4, 4, 0, 0]}>
-                    <LabelList dataKey="pct" position="top" formatter={v => `${v}%`}
-                      style={{ fontSize: 11, fill: '#374151', fontWeight: 700 }} />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-              <p style={s.chartNote}>
-                ※ 득점률이 가장 높은 문항은 {data.bestProb?.name}({data.bestProb?.pct}%), 가장 낮은 문항은 {data.worstProb?.name}({data.worstProb?.pct}%)입니다.
-              </p>
-            </div>
-
-            <div style={s.chartCard}>
-              <h3 style={s.chartTitle}>문항별 득점률 분포 박스플롯</h3>
-              <p style={s.chartDesc}>배점 차이를 보정하기 위해 각 문항 점수를 100점 기준 비율로 환산</p>
-              <div style={{ height: 220, position: 'relative', display: 'flex', alignItems: 'flex-end', gap: 0, padding: '10px 20px 40px' }}>
-                <BoxPlotChart data={data.boxData} unit="%" />
-              </div>
-              <p style={s.chartNote}>※ 상자는 25~75%(Q1~Q3) 구간, 선은 중앙값, ●는 평균입니다.</p>
-            </div>
-          </div>
-
-          {/* Row 3: Most missed criteria */}
+          {/* 1. 점수 분포 히스토그램 */}
           <div style={s.chartCardFull}>
-            <h3 style={s.chartTitle}>채점 항목별 평균 정답률 (낮은 순)</h3>
-            <p style={s.chartDesc}>가장 많이 틀린 항목 — 교육 보완이 필요한 영역</p>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart
-                data={data.criteriaData}
-                layout="vertical"
-                margin={{ top: 0, right: 60, left: 10, bottom: 0 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
-                <XAxis type="number" domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 12 }} />
-                <YAxis type="category" dataKey="item" width={90} tick={{ fontSize: 12 }} />
+            <div style={s.chartHeadRow}>
+              <div>
+                <h3 style={s.chartTitle}>{isPct ? '100점 환산 점수 분포' : '원점수 분포'}</h3>
+                <p style={s.chartDesc}>
+                  {isPct
+                    ? '10점 간격 구간별 학생 수 (명)'
+                    : `원점수 구간별 학생 수 (만점 ${data.maxScore}점, ${binWidth}점 간격 · ${shownHist.length}개 구간)`}
+                </p>
+              </div>
+              {/* 원점수 뷰에서만 구간 폭을 직접 고를 수 있다 */}
+              {!isPct && data.widthOptions.length > 1 && (
+                <div style={s.binPicker}>
+                  <span style={s.binPickerLabel}>구간 폭</span>
+                  {data.widthOptions.map(w => (
+                    <button key={w}
+                      style={w === binWidth ? s.binBtnActive : s.binBtn}
+                      onClick={() => setBinWidth(w)}
+                      title={`${w}점 간격 · ${Math.ceil(data.maxScore / w)}개 구간`}
+                    >
+                      {w}점
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={shownHist} margin={{ top: 16, right: 16, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="label" tick={{ fontSize: shownHist.length > 12 ? 10 : 12 }}
+                  interval={0} angle={shownHist.length > 12 ? -35 : 0}
+                  textAnchor={shownHist.length > 12 ? 'end' : 'middle'}
+                  height={shownHist.length > 12 ? 52 : 30} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
                 <Tooltip
-                  formatter={(v) => [`${v}%`, '정답률']}
-                  content={({ active, payload }) => {
+                  content={({ active, payload, label }) => {
                     if (!active || !payload?.length) return null;
                     const d = payload[0].payload;
                     return (
-                      <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}>
-                        <p style={{ fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>{d.fullItem}</p>
-                        <p style={{ color: '#2563eb' }}>정답률: <strong>{d.rate}%</strong></p>
+                      <div style={s.tooltip}>
+                        <p style={s.tooltipTitle}>
+                          {isPct ? `${label}점` : `원점수 ${label}점 (${d.pctRange})`}
+                        </p>
+                        <p style={{ color: '#2563eb', margin: '2px 0' }}>학생 수: <strong>{d.count}명</strong></p>
                       </div>
                     );
                   }}
                 />
-                <Bar dataKey="rate" name="정답률" radius={[0, 4, 4, 0]}>
-                  {data.criteriaData.map((entry, i) => (
-                    <Cell key={i} fill={entry.rate >= 70 ? '#059669' : entry.rate >= 40 ? '#d97706' : '#dc2626'} />
+                <Bar dataKey="count" name="학생 수" radius={[4, 4, 0, 0]}>
+                  {shownHist.map((entry, i) => (
+                    <Cell key={i} fill={entry.count === Math.max(...shownHist.map(d => d.count)) ? '#2563eb' : '#93c5fd'} />
                   ))}
-                  <LabelList dataKey="rate" position="right" formatter={v => `${v}%`}
-                    style={{ fontSize: 12, fill: '#374151', fontWeight: 600 }} />
+                  <LabelList dataKey="count" position="top" style={{ fontSize: 12, fill: '#374151', fontWeight: 600 }} />
                 </Bar>
-                <ReferenceLine x={70} stroke="#059669" strokeDasharray="4 3" label={{ value: '70%', position: 'top', fontSize: 11, fill: '#059669' }} />
               </BarChart>
             </ResponsiveContainer>
+            <p style={s.chartNote}>
+              ※ 점수가 {isPct ? `${topBin?.range}점` : `${topBin?.range}점(${topBin?.pctRange})`} 구간에
+              {' '}가장 많이 분포되어 있습니다({topBin?.count}명).
+              {!isPct && ' 구간 폭은 위 버튼으로 바꿀 수 있습니다.'}
+            </p>
+          </div>
+
+          {/* 2. 문항별 평균 점수 */}
+          <div style={s.chartCardFull}>
+            <h3 style={s.chartTitle}>문항별 평균 점수</h3>
+            <p style={s.chartDesc}>
+              막대에 적힌 점수는 <strong style={{ color: '#64748b' }}>원점수 그대로의 학생 평균</strong>입니다.
+              문제의 난이도는 <strong style={{ color: '#64748b' }}>배점 대비 비율</strong>로 판단합니다 ·{' '}
+              <span style={s.formula}>배점 대비 비율 = 학생 평균 점수 ÷ 문항 배점 × 100</span>
+            </p>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart
+                data={data.problemData}
+                margin={{ top: 24, right: 16, left: -10, bottom: 8 }}
+                barGap={-36}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                <YAxis tickFormatter={v => `${v}점`} tick={{ fontSize: 12 }} allowDecimals={false} />
+                <Tooltip
+                  cursor={{ fill: 'rgba(148,163,184,0.10)' }}
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const d = payload[0].payload;
+                    return (
+                      <div style={s.tooltip}>
+                        <p style={s.tooltipTitle}>
+                          {d.name}
+                          {d.tone === HARD ? ' · 가장 어려웠던 문항' : d.tone === EASY ? ' · 가장 쉬웠던 문항' : ''}
+                        </p>
+                        <p style={{ color: d.tone, margin: '2px 0' }}>
+                          평균 <strong>{d.avg}점</strong> / 배점 {d.full}점
+                        </p>
+                        <p style={{ color: '#64748b', margin: '2px 0' }}>배점 대비 {d.pct}%</p>
+                        <p style={{ color: '#94a3b8', margin: '2px 0', fontSize: 12 }}>채점 학생 {d.n}명</p>
+                      </div>
+                    );
+                  }}
+                />
+                {/* 최난이도/최이도 문항의 칸 전체를 연한 빨강·초록으로 강조 */}
+                {data.problemData.map((entry, i) => (
+                  entry.kind === 'mid' ? null : (
+                    <ReferenceArea key={i} x1={entry.name} x2={entry.name}
+                      fill={entry.bg} fillOpacity={1} ifOverflow="extendDomain" />
+                  )
+                ))}
+                {/* 배경 막대: 문항 배점 */}
+                <Bar dataKey="full" name="배점" fill="#e2e8f0" radius={[4, 4, 0, 0]} barSize={36}
+                  isAnimationActive={false} />
+                {/* 전경 막대: 평균 점수 — 배점 막대와 같은 폭으로 겹쳐 그린다 */}
+                <Bar dataKey="avg" name="평균 점수" fill={MID} radius={[4, 4, 0, 0]} barSize={36}>
+                  <LabelList dataKey="avg" position="top" formatter={v => `${v}점`}
+                    style={{ fontSize: 12, fill: '#374151', fontWeight: 700 }} />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+            <p style={s.chartNote}>
+              ※ <span style={{ background: HARD_BG, color: HARD, fontWeight: 700, padding: '1px 6px', borderRadius: 4 }}>
+                가장 어려웠던 문항
+              </span>{' '}{data.hardest?.name} ({data.hardest?.avg}/{data.hardest?.full}점, 배점 대비 {data.hardest?.pct}%) ·{' '}
+              <span style={{ background: EASY_BG, color: EASY, fontWeight: 700, padding: '1px 6px', borderRadius: 4 }}>
+                가장 쉬웠던 문항
+              </span>{' '}{data.easiest?.name} ({data.easiest?.avg}/{data.easiest?.full}점, 배점 대비 {data.easiest?.pct}%).
+              {' '}난이도는 원점수가 아니라 <strong>배점 대비 비율</strong>로 비교합니다.
+            </p>
+          </div>
+
+          {/* 3. 상위 / 하위 학생 */}
+          <div style={s.chartCardFull}>
+            <h3 style={s.chartTitle}>상위 · 하위 {data.N}명</h3>
+            <p style={s.chartDesc}>
+              {isPct ? '100점 환산 점수' : '원점수'} 기준 · 동점자는 순서가 임의일 수 있습니다
+            </p>
+            <div style={s.tableRow}>
+              {/* 하위 */}
+              <div>
+                <div style={{ ...s.tableHead, color: '#dc2626' }}>⚠️ 보완이 필요한 하위 {data.N}명</div>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      <th style={s.th}>학생</th>
+                      <th style={{ ...s.th, textAlign: 'right', width: 80 }}>점수</th>
+                      <th style={{ ...s.th, width: '45%' }}>취약 문항</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.bottomN.map((st, i) => (
+                      <tr key={i}>
+                        <td style={s.td}>{st.name}</td>
+                        <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, color: '#dc2626' }}>
+                          {fmtScore(st)}
+                        </td>
+                        <td style={{ ...s.td, color: '#64748b' }}>
+                          {st.zeroIds.length
+                            ? st.zeroIds.map(id => `문제 ${id}`).join(', ')
+                            : st.weakestId != null ? `문제 ${st.weakestId}` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 상위 */}
+              <div>
+                <div style={{ ...s.tableHead, color: '#059669' }}>🏆 상위 {data.N}명</div>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      <th style={s.th}>학생</th>
+                      <th style={{ ...s.th, textAlign: 'right', width: 80 }}>점수</th>
+                      <th style={{ ...s.th, width: '45%' }}>만점 문항</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.topN.map((st, i) => (
+                      <tr key={i}>
+                        <td style={s.td}>{st.name}</td>
+                        <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, color: '#059669' }}>
+                          {fmtScore(st)}
+                        </td>
+                        <td style={{ ...s.td, color: '#64748b' }}>
+                          {st.totalProbs
+                            ? `${st.totalProbs}문항 중 ${st.perfect}개 만점`
+                            : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <p style={s.chartNote}>
+              ※ 취약 문항은 0점을 받은 문항입니다. 0점 문항이 없으면 획득률이 가장 낮은 문항 1개를 표시합니다.
+            </p>
           </div>
         </div>
       </div>
     </div>
-  );
-}
-
-/* ── Inline box plot chart (pure SVG) ── */
-function BoxPlotChart({ data, unit = '' }) {
-  if (!data.length) return null;
-  const W = 100 / data.length;
-  const maxVal = Math.max(...data.map(d => d.full || d.max));
-  const scale = v => 160 * (1 - v / maxVal);
-
-  return (
-    <svg width="100%" height="100%" viewBox={`0 0 400 180`} style={{ overflow: 'visible' }}>
-      {/* Y-axis labels */}
-      {[0, 0.25, 0.5, 0.75, 1].map(t => (
-        <g key={t}>
-          <line x1={40} y1={scale(maxVal * t)} x2={380} y2={scale(maxVal * t)} stroke="#f1f5f9" strokeWidth={1} />
-          <text x={35} y={scale(maxVal * t) + 4} textAnchor="end" fontSize={10} fill="#94a3b8">{Math.round(maxVal * t)}{unit}</text>
-        </g>
-      ))}
-
-      {data.map((d, i) => {
-        const cx = 60 + i * (320 / data.length) + (320 / data.length) / 2;
-        const bw = Math.min(40, 280 / data.length * 0.5);
-        const yMin = scale(d.min), yQ1 = scale(d.q1), yMed = scale(d.median), yQ3 = scale(d.q3), yMax = scale(d.max), yAvg = scale(d.avg);
-
-        return (
-          <g key={i}>
-            {/* Max/Min whisker */}
-            <line x1={cx} y1={yMin} x2={cx} y2={yMax} stroke="#94a3b8" strokeWidth={1.5} />
-            {/* Min/Max caps */}
-            <line x1={cx - bw * 0.4} y1={yMin} x2={cx + bw * 0.4} y2={yMin} stroke="#64748b" strokeWidth={2} />
-            <line x1={cx - bw * 0.4} y1={yMax} x2={cx + bw * 0.4} y2={yMax} stroke="#64748b" strokeWidth={2} />
-            {/* IQR box */}
-            <rect x={cx - bw / 2} y={yQ3} width={bw} height={Math.max(yQ1 - yQ3, 1)} fill="#bfdbfe" stroke="#2563eb" strokeWidth={1.5} rx={3} />
-            {/* Median */}
-            <line x1={cx - bw / 2} y1={yMed} x2={cx + bw / 2} y2={yMed} stroke="#1d4ed8" strokeWidth={2.5} />
-            {/* Avg dot (orange) */}
-            <circle cx={cx} cy={yAvg} r={4} fill="#f59e0b" stroke="#fff" strokeWidth={1.5} />
-            {/* X label */}
-            <text x={cx} y={175} textAnchor="middle" fontSize={11} fill="#374151" fontWeight={600}>{d.name}</text>
-          </g>
-        );
-      })}
-
-      {/* Legend */}
-      <g transform="translate(40, 5)">
-        <rect x={0} y={0} width={12} height={12} fill="#bfdbfe" stroke="#2563eb" strokeWidth={1} rx={2} />
-        <text x={16} y={10} fontSize={10} fill="#374151">Q1~Q3 (IQR)</text>
-        <line x1={80} y1={6} x2={94} y2={6} stroke="#1d4ed8" strokeWidth={2.5} />
-        <text x={98} y={10} fontSize={10} fill="#374151">중앙값</text>
-        <circle cx={145} cy={6} r={4} fill="#f59e0b" />
-        <text x={153} y={10} fontSize={10} fill="#374151">평균</text>
-      </g>
-    </svg>
   );
 }
 
@@ -495,18 +517,54 @@ const s = {
   },
   summaryVal: { fontSize: 22, fontWeight: 700, color: '#1e293b' },
   summaryLabel: { fontSize: 12 },
-  row: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 },
-  chartCard: {
-    background: '#fff', borderRadius: 12, padding: '20px 20px 16px',
-    boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
-  },
   chartCardFull: {
     background: '#fff', borderRadius: 12, padding: '20px 20px 16px',
     boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
   },
+  chartHeadRow: {
+    display: 'flex', alignItems: 'flex-start',
+    justifyContent: 'space-between', gap: 16,
+  },
+  binPicker: {
+    display: 'flex', alignItems: 'center', gap: 4,
+    background: '#f1f5f9', borderRadius: 8, padding: 3, flexShrink: 0,
+  },
+  binPickerLabel: { fontSize: 11, color: '#94a3b8', fontWeight: 600, padding: '0 6px' },
+  binBtn: {
+    background: 'transparent', border: 'none', borderRadius: 6,
+    padding: '4px 10px', fontSize: 12, color: '#64748b',
+    cursor: 'pointer', fontWeight: 500, whiteSpace: 'nowrap',
+  },
+  binBtnActive: {
+    background: '#fff', border: 'none', borderRadius: 6,
+    padding: '4px 10px', fontSize: 12, color: '#2563eb',
+    cursor: 'pointer', fontWeight: 700, whiteSpace: 'nowrap',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+  },
   chartTitle: { fontSize: 15, fontWeight: 700, color: '#1e293b', marginBottom: 2 },
   chartDesc: { fontSize: 12, color: '#94a3b8', marginBottom: 16 },
+  formula: {
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    color: '#64748b', background: '#f8fafc',
+    border: '1px solid #e2e8f0', borderRadius: 5, padding: '1px 6px',
+  },
   chartNote: { fontSize: 11, color: '#94a3b8', marginTop: 10, lineHeight: 1.5 },
+  tooltip: {
+    background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8,
+    padding: '10px 14px', fontSize: 13, boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+  },
+  tooltipTitle: { fontWeight: 700, color: '#1e293b', marginBottom: 4 },
+  tableRow: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 },
+  tableHead: { fontSize: 13, fontWeight: 700, marginBottom: 8 },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
+  th: {
+    textAlign: 'left', fontSize: 11, fontWeight: 600, color: '#94a3b8',
+    padding: '6px 8px', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap',
+  },
+  td: {
+    padding: '8px', borderBottom: '1px solid #f1f5f9', color: '#1e293b',
+    overflow: 'hidden', textOverflow: 'ellipsis',
+  },
   warnBanner: {
     background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e',
     borderRadius: 10, padding: '10px 16px', fontSize: 13, fontWeight: 500,

@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { gradingAPI } from '../services/api';
+import { useSubjectFilter } from '../components/AppLayout';
+import { useCached, CACHE_KEYS } from '../services/dataCache';
 
 function formatDateTime(iso) {
   if (!iso) return '-';
@@ -47,27 +49,31 @@ function ValueBox({ value, isOld }) {
 
 export default function RevisionLogPage() {
   const navigate = useNavigate();
-  const [logs, setLogs] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const navFilter = useSubjectFilter();
+  // 캐시된 로그를 즉시 보여주고 뒤에서 갱신한다
+  const { data: logs, loading } = useCached(
+    CACHE_KEYS.revisions, gradingAPI.getAllRevisions, { fallback: [] }
+  );
   const [search, setSearch] = useState('');
   const [filterField, setFilterField] = useState('all');
-  const [filterSubject, setFilterSubject] = useState('all');
+  const [filterSubject, setFilterSubject] = useState(navFilter.subject);
 
-  useEffect(() => {
-    gradingAPI.getAllRevisions()
-      .then(res => setLogs(res.data || []))
-      .catch(() => setLogs([]))
-      .finally(() => setLoading(false));
-  }, []);
+  // 사이드바에서 과목을 바꾸면 이 페이지의 필터도 따라간다
+  useEffect(() => { setFilterSubject(navFilter.subject); }, [navFilter.subject]);
 
   const subjects = useMemo(
     () => [...new Set(logs.map(l => l.subject_name).filter(Boolean))],
     [logs]
   );
 
+  // 세부 항목은 사이드바에서만 고르며, 해당 과목을 보고 있을 때만 적용된다
+  const navItem = (navFilter.item !== 'all' && filterSubject === navFilter.subject)
+    ? navFilter.item : null;
+
   const filtered = logs.filter(log => {
     if (filterField !== 'all' && log.field_name !== filterField) return false;
     if (filterSubject !== 'all' && log.subject_name !== filterSubject) return false;
+    if (navItem && log.subject_item_name !== navItem) return false;
     if (search) {
       const q = search.toLowerCase();
       const haystack = [

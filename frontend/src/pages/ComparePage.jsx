@@ -1,46 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { gradingAPI } from '../services/api';
+import {
+  formatDate, ModelBadge as SharedModelBadge, buildRegradeRows, groupBySubject,
+} from '../components/sessionUi';
+import { useSubjectFilter } from '../components/AppLayout';
+import { useCached, CACHE_KEYS } from '../services/dataCache';
 
 const MAX_SESSIONS = 4;
 
 const round2 = v => Math.round((v + Number.EPSILON) * 100) / 100;
 const fmt = v => (v === null || v === undefined || Number.isNaN(v)) ? '—' : String(round2(v));
 
-// 날짜/시간을 각각 nowrap으로 감싸 줄바꿈이 필요하면 날짜와 시간 사이에서만 일어나게 함
-function formatDate(iso) {
-  if (!iso) return '-';
-  const d = new Date(iso);
-  const datePart = d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' });
-  const timePart = d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-  return (
-    <>
-      <span style={{ whiteSpace: 'nowrap' }}>{datePart}</span>{' '}
-      <span style={{ whiteSpace: 'nowrap' }}>{timePart}</span>
-    </>
-  );
-}
-
+// ComparePage는 모델 배지를 조금 넓게(120px) 쓰고 세로 중앙 정렬한다
 function ModelBadge({ model, label }) {
-  const provider = (model || '').split('/')[0];
-  const displayName = label || (model || '').split('/').pop() || '-';
-  const cfg = provider === 'fireworks'
-    ? { bg: '#fef3c7', color: '#b45309' }
-    : { bg: '#dbeafe', color: '#1d4ed8' };
-  return (
-    <span
-      title={model}
-      style={{
-        background: cfg.bg, color: cfg.color, borderRadius: 6,
-        padding: '3px 8px', fontSize: 11, fontWeight: 600,
-        fontFamily: 'monospace', whiteSpace: 'nowrap',
-        maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis',
-        display: 'inline-block', verticalAlign: 'middle',
-      }}
-    >
-      {displayName}
-    </span>
-  );
+  return <SharedModelBadge model={model} label={label} maxWidth="120px" verticalAlign="middle" />;
 }
 
 function DeltaBadge({ value }) {
@@ -207,6 +181,7 @@ function ProblemCompare({ pid, cells, basis }) {
 
 export default function ComparePage() {
   const navigate = useNavigate();
+  const navFilter = useSubjectFilter();
   const [searchParams] = useSearchParams();
   const idsParam = searchParams.get('ids') || '';
   const allIds = useMemo(() => idsParam.split(',').filter(Boolean), [idsParam]);
@@ -222,29 +197,32 @@ export default function ComparePage() {
   const [sortMode, setSortMode] = useState('name'); // 'name' | 'delta'
   const [expanded, setExpanded] = useState(new Set());
 
-  // 세션 선택 화면 (ids 없이 진입 시)
-  const [pickerList, setPickerList] = useState([]);
+  // 세션 선택 화면 (ids 없이 진입 시) — 채점 기록 캐시를 그대로 재사용한다
+  const pickerMode = ids.length < 2;
+  const { data: historyData, loading: pickerLoading } = useCached(
+    CACHE_KEYS.history, gradingAPI.getHistory, { enabled: pickerMode, fallback: [] }
+  );
+  const pickerList = useMemo(
+    () => (historyData || []).filter(h => h.status === 'completed'),
+    [historyData]
+  );
   const [pickSel, setPickSel] = useState(new Set());
+
+  // 모델 라벨 — 두 모드 모두에서 쓰이고 거의 바뀌지 않으므로 캐시한다
+  const { data: modelsData } = useCached(CACHE_KEYS.models, gradingAPI.getAvailableModels);
+  useEffect(() => {
+    const map = {};
+    (modelsData?.models || []).forEach(m => { map[m.id] = m.label; });
+    setModelLabels(map);
+  }, [modelsData]);
 
   useEffect(() => {
     let alive = true;
     if (ids.length < 2) {
-      // 선택 화면 모드: 완료된 세션 목록 로드
+      // 선택 화면 모드 — 목록은 캐시(useCached)가 담당하므로 여기서는 상태만 정리한다
       setSessions(null);
       setError('');
-      setLoading(true);
-      gradingAPI.getHistory()
-        .then(res => { if (alive) setPickerList((res.data || []).filter(h => h.status === 'completed')); })
-        .catch(() => { if (alive) setError('채점 기록을 불러오지 못했습니다.'); })
-        .finally(() => { if (alive) setLoading(false); });
-      gradingAPI.getAvailableModels()
-        .then(res => {
-          if (!alive) return;
-          const map = {};
-          (res.data.models || []).forEach(m => { map[m.id] = m.label; });
-          setModelLabels(map);
-        })
-        .catch(() => {});
+      setLoading(false);
       return () => { alive = false; };
     }
     setLoading(true);
@@ -288,14 +266,6 @@ export default function ComparePage() {
         if (alive) setLoading(false);
       }
     })();
-    gradingAPI.getAvailableModels()
-      .then(res => {
-        if (!alive) return;
-        const map = {};
-        (res.data.models || []).forEach(m => { map[m.id] = m.label; });
-        setModelLabels(map);
-      })
-      .catch(() => {});
     return () => { alive = false; };
   }, [ids]);
 
@@ -434,14 +404,14 @@ export default function ComparePage() {
   const maxTotal = sessions && sessions[0].finalResults[0] ? sessions[0].finalResults[0].max_total_score : null;
 
   // 세션 선택 화면: 과목별 그룹
-  const pickerGrouped = useMemo(() => {
-    const g = {};
-    pickerList.forEach(h => {
-      const k = h.subject_name || '과목 미지정';
-      (g[k] = g[k] || []).push(h);
-    });
-    return g;
-  }, [pickerList]);
+  // 사이드바 과목/세부 항목 필터를 세션 선택 목록에도 적용한다
+  const pickerFiltered = useMemo(() => pickerList.filter(h => {
+    if (navFilter.subject !== 'all' && h.subject_name !== navFilter.subject) return false;
+    if (navFilter.item !== 'all' && h.subject_item_name !== navFilter.item) return false;
+    return true;
+  }), [pickerList, navFilter.subject, navFilter.item]);
+
+  const pickerGrouped = useMemo(() => groupBySubject(pickerFiltered), [pickerFiltered]);
 
   const togglePick = (id) => {
     setPickSel(prev => {
@@ -459,7 +429,7 @@ export default function ComparePage() {
           <button style={s.backBtn} onClick={() => navigate('/history')}>← 채점 기록</button>
           <h1 style={s.pageTitle}>⚖ 채점 결과 비교</h1>
         </div>
-        {loading ? (
+        {(pickerMode ? pickerLoading : loading) ? (
           <div style={s.empty}>비교 데이터 로딩 중...</div>
         ) : ids.length < 2 ? (
           /* ── 세션 선택 화면 (사이드바 메뉴로 직접 진입 시) ── */
@@ -475,10 +445,14 @@ export default function ComparePage() {
                 같은 시험을 다른 AI로 재채점한 세션끼리는 학생별 상세 비교가 되고,
                 만점이 다른 세션끼리는 100점 환산 기준으로 비교돼요.
               </div>
-              {pickerList.length === 0 ? (
+              {pickerFiltered.length === 0 ? (
                 <div style={s.empty}>
                   <div style={s.emptyIcon}>📭</div>
-                  <p>완료된 채점 세션이 없습니다</p>
+                  <p>
+                    {pickerList.length === 0
+                      ? '완료된 채점 세션이 없습니다'
+                      : '사이드바 과목 필터에 해당하는 세션이 없습니다'}
+                  </p>
                 </div>
               ) : (
                 <>
@@ -496,27 +470,7 @@ export default function ComparePage() {
                   </div>
                   {Object.entries(pickerGrouped).map(([subjectName, list]) => {
                     // 재채점 세션을 원본 아래에 묶어서 표시 (채점 기록과 동일한 규칙)
-                    const idSet = new Set(list.map(h => h.session_id));
-                    const childrenMap = {};
-                    const roots = [];
-                    list.forEach(h => {
-                      if (h.regraded_from && idSet.has(h.regraded_from)) {
-                        (childrenMap[h.regraded_from] = childrenMap[h.regraded_from] || []).push(h);
-                      } else {
-                        roots.push(h);
-                      }
-                    });
-                    const displayRows = roots.flatMap(r => {
-                      const kids = childrenMap[r.session_id] || [];
-                      const inGroup = kids.length > 0;
-                      return [
-                        { session: r, isChild: false, inGroup, isGroupStart: inGroup, isGroupEnd: false },
-                        ...kids.map((c, i) => ({
-                          session: c, isChild: true, inGroup: true,
-                          isGroupStart: false, isGroupEnd: i === kids.length - 1,
-                        })),
-                      ];
-                    });
+                    const displayRows = buildRegradeRows(list);
 
                     return (
                       <div key={subjectName} style={s.pickGroup}>

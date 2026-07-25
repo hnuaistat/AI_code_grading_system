@@ -1,78 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { gradingAPI } from '../services/api';
-
-// 날짜/시간을 각각 nowrap으로 감싸 줄바꿈이 필요하면 날짜와 시간 사이에서만 일어나게 함
-function formatDate(iso) {
-  if (!iso) return '-';
-  const d = new Date(iso);
-  const datePart = d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' });
-  const timePart = d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-  return (
-    <>
-      <span style={{ whiteSpace: 'nowrap' }}>{datePart}</span>{' '}
-      <span style={{ whiteSpace: 'nowrap' }}>{timePart}</span>
-    </>
-  );
-}
-
-function formatDuration(createdAt, completedAt) {
-  if (!createdAt || !completedAt) return '-';
-  const diffMs = new Date(completedAt) - new Date(createdAt);
-  if (diffMs <= 0) return '-';
-  const totalSec = Math.floor(diffMs / 1000);
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  if (min === 0) return `${sec}초`;
-  if (sec === 0) return `${min}분`;
-  return `${min}분 ${sec}초`;
-}
-
-function StatusBadge({ status }) {
-  const cfg = {
-    completed:      { bg: '#dcfce7', color: '#16a34a', label: '완료' },
-    running:        { bg: '#dbeafe', color: '#2563eb', label: '진행 중' },
-    pending:        { bg: '#f1f5f9', color: '#64748b', label: '대기' },
-    error:          { bg: '#fee2e2', color: '#dc2626', label: '오류' },
-    cancelled:      { bg: '#fef3c7', color: '#b45309', label: '중단됨' },
-    quota_exceeded: { bg: '#fee2e2', color: '#dc2626', label: '쿼터 초과' },
-  }[status] || { bg: '#f1f5f9', color: '#64748b', label: status };
-  return (
-    <span style={{ background: cfg.bg, color: cfg.color, borderRadius: 20,
-      padding: '3px 12px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
-      {cfg.label}
-    </span>
-  );
-}
-
-function ModelBadge({ model, label }) {
-  const provider = (model || '').split('/')[0];
-  const displayName = label || (model || '').split('/').pop() || '-';
-  const cfg = provider === 'fireworks'
-    ? { bg: '#fef3c7', color: '#b45309' }
-    : { bg: '#dbeafe', color: '#1d4ed8' };
-  return (
-    <span
-      title={model}
-      style={{
-        background: cfg.bg, color: cfg.color, borderRadius: 6,
-        padding: '3px 8px', fontSize: 11, fontWeight: 600,
-        fontFamily: 'monospace', whiteSpace: 'nowrap',
-        maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis',
-        display: 'inline-block',
-      }}
-    >
-      {displayName}
-    </span>
-  );
-}
+import {
+  formatDate, StatusBadge, ModelBadge, buildRegradeRows, groupBySubject,
+} from '../components/sessionUi';
+import { useSubjectFilter } from '../components/AppLayout';
+import { useCached, CACHE_KEYS } from '../services/dataCache';
 
 export default function HistoryPage() {
   const navigate = useNavigate();
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const navFilter = useSubjectFilter();
   const [search, setSearch] = useState('');
-  const [filterSubject, setFilterSubject] = useState('all');
+  const [filterSubject, setFilterSubject] = useState(navFilter.subject);
+
+  // 사이드바에서 과목을 바꾸면 이 페이지의 필터도 따라간다
+  useEffect(() => { setFilterSubject(navFilter.subject); }, [navFilter.subject]);
 
   // 단일 삭제 모달
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -167,17 +109,13 @@ export default function HistoryPage() {
     }
   };
 
-  const reloadHistory = () => {
-    setLoading(true);
-    gradingAPI.getHistory()
-      .then(res => setHistory(res.data))
-      .catch(() => setHistory([]))
-      .finally(() => setLoading(false));
-  };
+  // 캐시된 목록을 즉시 보여주고 뒤에서 갱신한다 (재방문 시 로딩 화면이 뜨지 않음)
+  const {
+    data: history, loading, refresh,
+  } = useCached(CACHE_KEYS.history, gradingAPI.getHistory, { fallback: [] });
 
-  useEffect(() => {
-    reloadHistory();
-  }, []);
+  // 삭제·재채점 등 쓰기 작업 후에는 캐시를 버리고 다시 받는다
+  const reloadHistory = refresh;
 
   // 단일 삭제
   const openDeleteModal = (session) => {
@@ -275,21 +213,21 @@ export default function HistoryPage() {
 
   const subjects = [...new Set(history.map(h => h.subject_name).filter(Boolean))];
 
+  // 세부 항목은 사이드바에서만 고르며, 해당 과목을 보고 있을 때만 적용된다
+  const navItem = (navFilter.item !== 'all' && filterSubject === navFilter.subject)
+    ? navFilter.item : null;
+
   const filtered = history.filter(h => {
     const matchSubject = filterSubject === 'all' || h.subject_name === filterSubject;
+    const matchItem = !navItem || h.subject_item_name === navItem;
     const matchSearch = !search ||
       (h.subject_name || '').includes(search) ||
       (h.subject_code || '').includes(search) ||
       h.session_id.includes(search);
-    return matchSubject && matchSearch;
+    return matchSubject && matchItem && matchSearch;
   });
 
-  const grouped = filtered.reduce((acc, h) => {
-    const key = h.subject_name || '과목 미지정';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(h);
-    return acc;
-  }, {});
+  const grouped = groupBySubject(filtered);
 
   return (
     <div style={s.page}>
@@ -338,27 +276,7 @@ export default function HistoryPage() {
               .map(s => s.session_id);
 
             // 재채점 세션을 원본(루트) 바로 아래에 묶어서 배치
-            const idSet = new Set(sessions.map(s => s.session_id));
-            const childrenMap = {};
-            const roots = [];
-            sessions.forEach(s => {
-              if (s.regraded_from && idSet.has(s.regraded_from)) {
-                (childrenMap[s.regraded_from] = childrenMap[s.regraded_from] || []).push(s);
-              } else {
-                roots.push(s);
-              }
-            });
-            const displayRows = roots.flatMap(r => {
-              const kids = childrenMap[r.session_id] || [];
-              const inGroup = kids.length > 0;
-              return [
-                { session: r, isChild: false, inGroup, isGroupStart: inGroup, isGroupEnd: false },
-                ...kids.map((c, i) => ({
-                  session: c, isChild: true, inGroup: true,
-                  isGroupStart: false, isGroupEnd: i === kids.length - 1,
-                })),
-              ];
-            });
+            const displayRows = buildRegradeRows(sessions);
 
             return (
               <div key={subjectName} style={s.subjectGroup}>

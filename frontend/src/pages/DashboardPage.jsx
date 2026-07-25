@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { gradingAPI } from '../services/api';
+import { invalidate, CACHE_KEYS } from '../services/dataCache';
 import { sendBrowserNotification } from '../services/notify';
 import ResultTable from '../components/ResultTable';
 import StudentDetailModal from '../components/StudentDetailModal';
@@ -37,6 +38,7 @@ export default function DashboardPage() {
     setItemSaving(true);
     try {
       await gradingAPI.updateSessionItem(sessionId, itemDraft.trim());
+      invalidate(CACHE_KEYS.history, CACHE_KEYS.dashboard, CACHE_KEYS.revisions);
       setItemEditing(false);
       await fetchSession();
     } catch (err) {
@@ -100,6 +102,7 @@ export default function DashboardPage() {
     setCancelling(true);
     try {
       await gradingAPI.cancelSession(sessionId);
+      invalidate(CACHE_KEYS.history, CACHE_KEYS.dashboard);
       await fetchSession();
     } catch (err) {
       setError(err.response?.data?.detail || '채점 중단에 실패했습니다');

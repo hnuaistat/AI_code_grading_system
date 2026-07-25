@@ -81,6 +81,10 @@ export const gradingAPI = {
   }),
 };
 
+export const dashboardAPI = {
+  summary: () => API.get('/dashboard/summary'),
+};
+
 export const adminAPI = {
   getStats: () => API.get('/admin/stats'),
   getUsers: () => API.get('/admin/users'),

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { gradingAPI } from '../services/api';
+import { invalidate, CACHE_KEYS } from '../services/dataCache';
 import { useAuth } from '../App';
 
 function NotebookPanel({ student }) {
@@ -158,6 +159,8 @@ function ProblemCard({ problem, sessionId, studentFilename, canEdit, onUpdated }
         payload.obtained_score = parseFloat(draftScore) || 0;
       }
       const res = await gradingAPI.reviseProblem(sessionId, payload);
+      // 점수·코멘트가 바뀌면 목록/수정로그/대시보드 집계가 모두 낡는다
+      invalidate(CACHE_KEYS.revisions, CACHE_KEYS.history, CACHE_KEYS.dashboard);
       onUpdated && onUpdated(res.data);
       setEditing(false);
     } catch (err) {
