@@ -47,6 +47,21 @@ class UpdateEmailRequest(BaseModel):
     email: str
 
 
+class AgreeTermsRequest(BaseModel):
+    """설정 화면에서 미동의 상태인 필수 약관에 동의한다."""
+    agree_terms: bool = False
+    agree_privacy: bool = False
+
+
+class UpdateProfileRequest(BaseModel):
+    """설정 화면의 내 정보 수정 — 보낸 항목만 반영한다(None이면 그대로 유지)."""
+    name: Optional[str] = None
+    school: Optional[str] = None
+    department: Optional[str] = None
+    phone: Optional[str] = None
+    agree_notify: Optional[bool] = None
+
+
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str

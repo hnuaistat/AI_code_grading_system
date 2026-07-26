@@ -78,6 +78,10 @@ async def get_current_user(
         "school": user.school,
         "department": user.department,
         "phone": user.phone,
+        "agree_notify": user.notify_agreed_at is not None,
+        "terms_agreed_at": user.terms_agreed_at.isoformat() if user.terms_agreed_at else None,
+        "privacy_agreed_at": user.privacy_agreed_at.isoformat() if user.privacy_agreed_at else None,
+        "notify_agreed_at": user.notify_agreed_at.isoformat() if user.notify_agreed_at else None,
     }
 
 

@@ -27,6 +27,8 @@ export const authAPI = {
   completeProfile: (payload) => API.post('/auth/complete-profile', payload),
   dismissProfilePrompt: () => API.post('/auth/dismiss-profile-prompt'),
   updateEmail: (email) => API.patch('/auth/me', { email }),
+  updateProfile: (payload) => API.patch('/auth/me/profile', payload),
+  agreeTerms: (payload) => API.post('/auth/agree-terms', payload),
   changePassword: (currentPassword, newPassword) =>
     API.post('/auth/change-password', { current_password: currentPassword, new_password: newPassword }),
 };

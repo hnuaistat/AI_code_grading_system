@@ -34,7 +34,7 @@ from schemas import (
     StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem, SubjectItemCreate,
     ProblemRevisionRequest, RevisionLogItem, SubjectUpdate, SubjectItemUpdate,
     DecomposeRequest, SessionSubjectItemUpdate, RegradeRequest,
-    UpdateEmailRequest, ChangePasswordRequest,
+    UpdateEmailRequest, UpdateProfileRequest, AgreeTermsRequest, ChangePasswordRequest,
     ExcelRevisionChange, ExcelRevisionError, ExcelPreviewResponse,
     ExcelApplyRequest, ExcelApplyResponse
 )
@@ -417,6 +417,86 @@ async def update_me(
     user.email = email
     db.commit()
     return {"id": user.id, "username": user.username, "email": user.email, "role": user.role}
+
+
+@app.patch("/auth/me/profile")
+async def update_my_profile(
+    request: UpdateProfileRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """설정 화면의 내 정보(이름·학교·학과·전화번호·알림 동의) 수정.
+
+    보내지 않은(None) 항목은 건드리지 않는다. 전화번호는 알림 수신 동의가
+    있을 때만 보관하고, 동의를 철회하면 즉시 파기한다.
+    """
+    user = db.query(models.User).filter(models.User.id == current_user["id"]).first()
+
+    if request.name is not None:
+        name = request.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="이름을 입력해주세요")
+        user.name = name
+    if request.school is not None:
+        user.school = request.school.strip() or None
+    if request.department is not None:
+        user.department = request.department.strip() or None
+
+    # 동의 상태를 먼저 확정한 뒤 전화번호를 처리한다
+    agree_notify = user.notify_agreed_at is not None
+    if request.agree_notify is not None:
+        agree_notify = request.agree_notify
+
+    if agree_notify:
+        if request.phone is not None:
+            user.phone = _normalize_phone(request.phone)
+        if user.notify_agreed_at is None:
+            user.notify_agreed_at = datetime.utcnow()
+    else:
+        # 동의 철회 — 수집 근거가 사라지므로 전화번호도 함께 파기
+        user.phone = None
+        user.notify_agreed_at = None
+
+    db.commit()
+    db.refresh(user)
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "role": user.role,
+        "name": user.name,
+        "school": user.school,
+        "department": user.department,
+        "phone": user.phone,
+        "agree_notify": user.notify_agreed_at is not None,
+    }
+
+
+@app.post("/auth/agree-terms")
+async def agree_terms(
+    request: AgreeTermsRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """미동의 상태인 필수 약관에 동의한다 (설정 화면용).
+
+    이미 동의한 항목의 시각은 덮어쓰지 않는다. 동의 철회는 이 경로로 하지
+    않는다 — 필수 약관은 서비스 이용 조건이라 탈퇴로만 철회된다.
+    """
+    user = db.query(models.User).filter(models.User.id == current_user["id"]).first()
+
+    now = datetime.utcnow()
+    if request.agree_terms and user.terms_agreed_at is None:
+        user.terms_agreed_at = now
+    if request.agree_privacy and user.privacy_agreed_at is None:
+        user.privacy_agreed_at = now
+
+    db.commit()
+    db.refresh(user)
+    return {
+        "terms_agreed_at": user.terms_agreed_at.isoformat() if user.terms_agreed_at else None,
+        "privacy_agreed_at": user.privacy_agreed_at.isoformat() if user.privacy_agreed_at else None,
+    }
 
 
 @app.post("/auth/change-password")
