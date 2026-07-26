@@ -35,6 +35,14 @@ const STATUS_TAG = {
   declined: { ...STATUS_TAG_BASE, background: '#f1f5f9', color: '#475569' },
 };
 
+// 거절한 사람은 과목에 들어온 적이 없으므로 '내보내기'가 아니라 '목록에서 지우기'
+const REMOVE_LABEL = { pending: '초대 취소', accepted: '내보내기', declined: '목록에서 지우기' };
+const REMOVE_TITLE = {
+  pending: '보낸 초대를 취소합니다',
+  accepted: '이 과목에서 내보냅니다',
+  declined: '이 기록을 목록에서 지웁니다',
+};
+
 function DropZone({ label, icon, accept, onDrop, file }) {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop, accept, multiple: false
@@ -703,6 +711,7 @@ export default function UploadPage() {
   const [lookupState, setLookupState] = useState('idle');   // idle | checking | found | missing
   const [inviteError, setInviteError] = useState('');
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [reinvitingId, setReinvitingId] = useState(null);
 
   // 채점 모델 선택 state
   const [availableModels, setAvailableModels] = useState([]);
@@ -776,11 +785,29 @@ export default function UploadPage() {
     }
   };
 
+  // 거절했던 사람에게 초대를 다시 보낸다. 백엔드가 기존 행을 pending 으로
+  // 되돌리므로 지웠다가 다시 입력할 필요가 없다
+  const handleReinvite = async (c) => {
+    setReinvitingId(c.user_id);
+    setInviteError('');
+    try {
+      const res = await subjectAPI.addCollaborator(selectedSubjectId, c.username);
+      setCollaborators(prev => prev.map(x => (x.user_id === c.user_id ? res.data : x)));
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      setInviteError(typeof d === 'string' ? d : '다시 초대에 실패했습니다');
+    } finally {
+      setReinvitingId(null);
+    }
+  };
+
   const handleRemoveCollaborator = async (c) => {
     const label = c.display || c.username;
-    const msg = c.status === 'pending'
-      ? `${label} 님에게 보낸 초대를 취소할까요?`
-      : `${label} 님을 이 과목에서 내보낼까요?\n이후 이 과목의 채점 결과를 볼 수 없게 됩니다.`;
+    const msg = {
+      pending: `${label} 님에게 보낸 초대를 취소할까요?`,
+      declined: `${label} 님의 거절 기록을 목록에서 지울까요?\n나중에 다시 초대하실 수 있습니다.`,
+      accepted: `${label} 님을 이 과목에서 내보낼까요?\n이후 이 과목의 채점 결과를 볼 수 없게 됩니다.`,
+    }[c.status] || `${label} 님을 목록에서 지울까요?`;
     if (!window.confirm(msg)) return;
     try {
       await subjectAPI.removeCollaborator(selectedSubjectId, c.user_id);
@@ -1163,12 +1190,24 @@ export default function UploadPage() {
                       <span style={STATUS_TAG[c.status] || STATUS_TAG.pending}>
                         {STATUS_LABEL[c.status] || c.status}
                       </span>
+                      {/* 거절한 사람은 다시 초대할 수 있다 — 지웠다 다시 입력할 필요 없이 */}
+                      {c.status === 'declined' && (
+                        <button
+                          style={s.collabReinviteBtn}
+                          onClick={() => handleReinvite(c)}
+                          disabled={reinvitingId === c.user_id}
+                          title="이 사람에게 초대를 다시 보냅니다"
+                        >
+                          {reinvitingId === c.user_id ? '보내는 중...' : '다시 초대'}
+                        </button>
+                      )}
                       <button
                         style={s.collabRemoveBtn}
                         onClick={() => handleRemoveCollaborator(c)}
-                        title={c.status === 'pending' ? '보낸 초대를 취소합니다' : '이 과목에서 내보냅니다'}
+                        disabled={reinvitingId === c.user_id}
+                        title={REMOVE_TITLE[c.status] || REMOVE_TITLE.pending}
                       >
-                        {c.status === 'pending' ? '초대 취소' : '내보내기'}
+                        {REMOVE_LABEL[c.status] || REMOVE_LABEL.pending}
                       </button>
                     </li>
                   ))}
@@ -1559,6 +1598,11 @@ const s = {
   collabWho: { fontSize: 14, color: '#1e293b', fontWeight: 600, flex: 1, minWidth: 120, wordBreak: 'break-all', lineHeight: 1.5 },
   collabRemoveBtn: {
     background: '#fff', border: '1px solid #fecaca', color: '#b91c1c', fontSize: 12,
+    fontWeight: 600, cursor: 'pointer', padding: '8px 12px', lineHeight: 1,
+    borderRadius: 6, whiteSpace: 'nowrap', flexShrink: 0, minHeight: 34,
+  },
+  collabReinviteBtn: {
+    background: '#fff', border: '1px solid #bfdbfe', color: '#1d4ed8', fontSize: 12,
     fontWeight: 600, cursor: 'pointer', padding: '8px 12px', lineHeight: 1,
     borderRadius: 6, whiteSpace: 'nowrap', flexShrink: 0, minHeight: 34,
   },
