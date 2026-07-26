@@ -1054,7 +1054,9 @@ export default function UploadPage() {
                   style={s.select}
                   value={selectedSubjectId}
                   onChange={e => {
-                    if (e.target.value === '__new__') setShowNewSubject(true);
+                    // 새 과목을 만드는 동안에는 공유 패널을 접는다 (다른 과목의
+                    // 협업자 목록이 새 과목 입력창과 섞여 보이지 않도록)
+                    if (e.target.value === '__new__') { setShowNewSubject(true); setShowCollab(false); }
                     else { setSelectedSubjectId(e.target.value); setShowNewSubject(false); }
                   }}
                 >
@@ -1069,7 +1071,10 @@ export default function UploadPage() {
                 <span style={{ fontSize: 13, color: '#94a3b8' }}>과목이 없습니다</span>
               )}
               {!showNewSubject && (
-                <button style={s.newSubjectBtn} onClick={() => setShowNewSubject(true)}>
+                <button
+                  style={s.newSubjectBtn}
+                  onClick={() => { setShowNewSubject(true); setShowCollab(false); }}
+                >
                   + 새 과목
                 </button>
               )}
@@ -1098,6 +1103,38 @@ export default function UploadPage() {
               </div>
             )}
           </div>
+
+          {/* 새 과목 만들기 — 과목 선택 바로 아래에 둔다. 공유 패널 뒤로 밀리면
+              방금 누른 버튼과 입력창이 멀어져 어디에 쓰는 칸인지 헷갈린다 */}
+          {showNewSubject && (
+            <div style={s.newSubjectForm}>
+              <input
+                style={s.input}
+                placeholder="과목명 (예: 알고리즘)"
+                value={newSubjectName}
+                onChange={e => setNewSubjectName(e.target.value)}
+                autoFocus
+              />
+              <input
+                style={s.input}
+                placeholder="과목코드 (선택, 예: CS101)"
+                value={newSubjectCode}
+                onChange={e => setNewSubjectCode(e.target.value)}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  style={s.createBtn}
+                  onClick={handleCreateSubject}
+                  disabled={subjectLoading || !newSubjectName.trim()}
+                >
+                  {subjectLoading ? '생성 중...' : '생성'}
+                </button>
+                <button style={s.cancelBtn} onClick={() => { setShowNewSubject(false); setNewSubjectName(''); setNewSubjectCode(''); }}>
+                  취소
+                </button>
+              </div>
+            </div>
+          )}
 
           {editingSubject && (
             <div style={s.newSubjectForm}>
@@ -1216,34 +1253,6 @@ export default function UploadPage() {
             </div>
           )}
 
-          {showNewSubject && (
-            <div style={s.newSubjectForm}>
-              <input
-                style={s.input}
-                placeholder="과목명 (예: 알고리즘)"
-                value={newSubjectName}
-                onChange={e => setNewSubjectName(e.target.value)}
-              />
-              <input
-                style={s.input}
-                placeholder="과목코드 (선택, 예: CS101)"
-                value={newSubjectCode}
-                onChange={e => setNewSubjectCode(e.target.value)}
-              />
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  style={s.createBtn}
-                  onClick={handleCreateSubject}
-                  disabled={subjectLoading || !newSubjectName.trim()}
-                >
-                  {subjectLoading ? '생성 중...' : '생성'}
-                </button>
-                <button style={s.cancelBtn} onClick={() => { setShowNewSubject(false); setNewSubjectName(''); setNewSubjectCode(''); }}>
-                  취소
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Subject Items */}
