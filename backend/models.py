@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Text, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -45,6 +45,31 @@ class Subject(Base):
     owner = relationship("User", back_populates="subjects")
     sessions = relationship("GradingSessionDB", back_populates="subject")
     items = relationship("SubjectItem", back_populates="subject", cascade="all, delete-orphan")
+    collaborators = relationship(
+        "SubjectCollaborator", back_populates="subject", cascade="all, delete-orphan"
+    )
+
+
+class SubjectCollaborator(Base):
+    """과목 공동 작업자. 초대받은 사람이 수락해야 실제 접근 권한이 생긴다.
+
+    권한 등급 컬럼은 두지 않는다 — 현재 요구사항은 "채점 가능" 단일 등급이고,
+    세분화가 필요해지면 permission 컬럼을 더하는 방식으로 확장한다.
+    """
+    __tablename__ = "subject_collaborators"
+    __table_args__ = (UniqueConstraint("subject_id", "user_id", name="uq_subject_collaborator"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    invited_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    status = Column(String(20), default="pending")  # pending | accepted | declined
+    created_at = Column(DateTime, default=datetime.utcnow)
+    responded_at = Column(DateTime, nullable=True)
+
+    subject = relationship("Subject", back_populates="collaborators")
+    user = relationship("User", foreign_keys=[user_id])
+    inviter = relationship("User", foreign_keys=[invited_by])
 
 
 class SubjectItem(Base):

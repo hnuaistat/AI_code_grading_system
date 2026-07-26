@@ -62,6 +62,33 @@ class UpdateProfileRequest(BaseModel):
     agree_notify: Optional[bool] = None
 
 
+class CollaboratorAdd(BaseModel):
+    """아이디 또는 이메일로 기존 가입자를 찾아 초대한다."""
+    identifier: str
+
+
+class CollaboratorResponse(BaseModel):
+    id: int                 # SubjectCollaborator.id (초대 취소·응답에 사용)
+    user_id: int
+    username: str
+    email: str
+    role: str
+    status: str             # pending | accepted | declined
+    invited_by: int
+    created_at: str
+    responded_at: Optional[str] = None
+
+
+class InvitationResponse(BaseModel):
+    id: int                 # SubjectCollaborator.id
+    subject_id: int
+    subject_name: str
+    subject_code: Optional[str] = None
+    invited_by_username: str
+    invited_by_name: Optional[str] = None
+    created_at: str
+
+
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str

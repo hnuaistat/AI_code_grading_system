@@ -39,8 +39,24 @@ export const subjectAPI = {
   getDetail: (subjectId) => API.get(`/subjects/${subjectId}`),
   update: (subjectId, name, code) => API.put(`/subjects/${subjectId}`, { name, code }),
   createItem: (subjectId, name) => API.post(`/subjects/${subjectId}/items`, { name }),
+  getCollaborators: (subjectId) => API.get(`/subjects/${subjectId}/collaborators`),
+  addCollaborator: (subjectId, identifier) =>
+    API.post(`/subjects/${subjectId}/collaborators`, { identifier }),
+  removeCollaborator: (subjectId, userId) =>
+    API.delete(`/subjects/${subjectId}/collaborators/${userId}`),
   updateItem: (subjectId, itemId, name) => API.put(`/subjects/${subjectId}/items/${itemId}`, { name }),
   deleteItem: (subjectId, itemId) => API.delete(`/subjects/${subjectId}/items/${itemId}`),
+};
+
+export const userAPI = {
+  // 초대 전 신원 확인 — whry(홍*동) 형태로 돌아온다
+  lookup: (identifier) => API.get('/users/lookup', { params: { identifier } }),
+};
+
+export const invitationAPI = {
+  list: () => API.get('/me/invitations'),
+  accept: (id) => API.post(`/me/invitations/${id}/accept`),
+  decline: (id) => API.post(`/me/invitations/${id}/decline`),
 };
 
 export const gradingAPI = {

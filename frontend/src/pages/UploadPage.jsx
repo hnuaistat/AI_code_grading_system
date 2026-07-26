@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
-import { gradingAPI, subjectAPI } from '../services/api';
+import { gradingAPI, subjectAPI, userAPI } from '../services/api';
 import StepIndicator from '../components/StepIndicator';
+import { useSubjectsVersion } from '../components/AppLayout';
 
 // Number input의 화살표 제거
 const style = document.createElement('style');
@@ -21,6 +22,18 @@ if (typeof document !== 'undefined') {
 }
 
 const STEPS = ['파일 업로드', 'AI 루브릭 생성', '루브릭 확인/수정', '채점 실행'];
+
+// 색만으로 구분되지 않도록 상태별 기호를 함께 붙인다
+const STATUS_LABEL = { pending: '⏳ 수락 대기', accepted: '✓ 참여 중', declined: '✕ 거절함' };
+const STATUS_TAG_BASE = {
+  fontSize: 12, fontWeight: 700, borderRadius: 4, padding: '4px 8px',
+  whiteSpace: 'nowrap', lineHeight: 1.4, flexShrink: 0,
+};
+const STATUS_TAG = {
+  pending: { ...STATUS_TAG_BASE, background: '#fef3c7', color: '#92400e' },
+  accepted: { ...STATUS_TAG_BASE, background: '#dcfce7', color: '#15803d' },
+  declined: { ...STATUS_TAG_BASE, background: '#f1f5f9', color: '#475569' },
+};
 
 function DropZone({ label, icon, accept, onDrop, file }) {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -681,11 +694,22 @@ export default function UploadPage() {
   const [editItemName, setEditItemName] = useState('');
   const [editItemLoading, setEditItemLoading] = useState(false);
 
+  // 협업자(조교) 관리 state — 과목 소유자에게만 노출
+  const [showCollab, setShowCollab] = useState(false);
+  const [collaborators, setCollaborators] = useState([]);
+  const [collabLoading, setCollabLoading] = useState(false);
+  const [inviteInput, setInviteInput] = useState('');
+  const [inviteLookup, setInviteLookup] = useState(null);   // {display, user_id} — 초대 전 신원 확인
+  const [lookupState, setLookupState] = useState('idle');   // idle | checking | found | missing
+  const [inviteError, setInviteError] = useState('');
+  const [inviteBusy, setInviteBusy] = useState(false);
+
   // 채점 모델 선택 state
   const [availableModels, setAvailableModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
 
   const navigate = useNavigate();
+  const subjectsVersion = useSubjectsVersion();
 
   useEffect(() => {
     subjectAPI.list().then(res => {
@@ -698,6 +722,73 @@ export default function UploadPage() {
       setSelectedModel(res.data.default || '');
     }).catch(() => { });
   }, []);
+
+  // 초대를 수락해 과목이 늘어나면 드롭다운도 따라오게 한다 (현재 선택은 유지)
+  useEffect(() => {
+    if (!subjectsVersion) return;
+    subjectAPI.list().then(res => setSubjects(res.data)).catch(() => { });
+  }, [subjectsVersion]);
+
+  // 협업 패널을 열거나 과목을 바꾸면 목록을 새로 가져온다
+  useEffect(() => {
+    if (!showCollab || !selectedSubjectId) return;
+    let cancelled = false;
+    setCollabLoading(true);
+    subjectAPI.getCollaborators(selectedSubjectId)
+      .then(res => { if (!cancelled) setCollaborators(res.data); })
+      .catch(() => { if (!cancelled) setCollaborators([]); })
+      .finally(() => { if (!cancelled) setCollabLoading(false); });
+    return () => { cancelled = true; };
+  }, [showCollab, selectedSubjectId]);
+
+  // 입력한 아이디/이메일이 누구인지 미리 보여준다 — whry(홍*동)
+  useEffect(() => {
+    const key = inviteInput.trim();
+    if (!showCollab || !key) { setInviteLookup(null); setLookupState('idle'); return; }
+    let cancelled = false;
+    // 조회 전에는 '없음'이 아니라 '확인 중' — 타이핑 도중 없는 사용자로 잘못
+    // 보이면 맞게 입력하고도 초대를 망설이게 된다
+    setLookupState('checking');
+    const timer = setTimeout(() => {
+      userAPI.lookup(key)
+        .then(res => { if (!cancelled) { setInviteLookup(res.data); setLookupState('found'); } })
+        .catch(() => { if (!cancelled) { setInviteLookup(null); setLookupState('missing'); } });
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [inviteInput, showCollab]);
+
+  const handleInvite = async () => {
+    const key = inviteInput.trim();
+    if (!key || !selectedSubjectId) return;
+    setInviteBusy(true);
+    setInviteError('');
+    try {
+      const res = await subjectAPI.addCollaborator(selectedSubjectId, key);
+      setCollaborators(prev => [...prev.filter(c => c.user_id !== res.data.user_id), res.data]);
+      setInviteInput('');
+      setInviteLookup(null);
+      setLookupState('idle');
+    } catch (e) {
+      const d = e.response?.data?.detail;
+      setInviteError(typeof d === 'string' ? d : '초대에 실패했습니다');
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
+  const handleRemoveCollaborator = async (c) => {
+    const label = c.display || c.username;
+    const msg = c.status === 'pending'
+      ? `${label} 님에게 보낸 초대를 취소할까요?`
+      : `${label} 님을 이 과목에서 내보낼까요?\n이후 이 과목의 채점 결과를 볼 수 없게 됩니다.`;
+    if (!window.confirm(msg)) return;
+    try {
+      await subjectAPI.removeCollaborator(selectedSubjectId, c.user_id);
+      setCollaborators(prev => prev.filter(x => x.user_id !== c.user_id));
+    } catch {
+      setInviteError('제거에 실패했습니다');
+    }
+  };
 
   // 진행 중인 항목 삭제 요청 (✕ 더블클릭 중복 방지)
   const deletingItemsRef = useRef(new Set());
@@ -958,10 +1049,25 @@ export default function UploadPage() {
             </div>
             {selectedSubject && !showNewSubject && !editingSubject && (
               <div style={s.subjectInfo}>
-                <span style={s.subjectInfoName}>{selectedSubject.name}</span>
-                {selectedSubject.code && <span style={s.subjectInfoCode}>{selectedSubject.code}</span>}
+                {/* 과목명·코드는 위 드롭다운에 이미 보이므로 여기서는 반복하지 않는다 */}
                 <span style={s.subjectInfoCount}>채점 {selectedSubject.session_count}회</span>
-                <button style={s.editSubjectBtn} onClick={handleEditSubjectStart} title="과목명 수정">✏️</button>
+                {selectedSubject.is_owner === false ? (
+                  // 공유받은 과목 — 누구 과목인지 보여주고 소유자 전용 기능은 감춘다
+                  <span style={s.sharedTag} title="공유받은 과목입니다">
+                    공유받음 · {selectedSubject.owner_name}
+                  </span>
+                ) : (
+                  <>
+                    <button style={s.editSubjectBtn} onClick={handleEditSubjectStart} title="과목명 수정">✏️ 수정</button>
+                    <button
+                      style={showCollab ? s.collabBtnOn : s.collabBtn}
+                      onClick={() => { setShowCollab(v => !v); setInviteError(''); }}
+                      title="조교 초대 및 공유 관리"
+                    >
+                      👥 공유
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -990,6 +1096,84 @@ export default function UploadPage() {
                 </button>
                 <button style={s.cancelBtn} onClick={() => setEditingSubject(false)}>취소</button>
               </div>
+            </div>
+          )}
+
+          {/* 협업자 관리 — 소유자에게만 보인다 */}
+          {showCollab && selectedSubject?.is_owner !== false && (
+            <div style={s.collabPanel}>
+              <div style={s.collabHead}>
+                <span style={s.collabTitle}>👥 이 과목을 함께 볼 사람</span>
+                <span style={s.collabHint}>
+                  초대를 수락해야 과목이 공유됩니다. 채점·수정은 가능하고, 과목 삭제는 소유자만 할 수 있어요.
+                </span>
+              </div>
+
+              <div style={s.inviteRow}>
+                <input
+                  style={s.inviteInput}
+                  placeholder="아이디 또는 이메일"
+                  value={inviteInput}
+                  onChange={e => { setInviteInput(e.target.value); setInviteError(''); }}
+                  onKeyDown={e => { if (e.key === 'Enter') handleInvite(); }}
+                  disabled={inviteBusy}
+                />
+                <button
+                  style={s.createBtn}
+                  onClick={handleInvite}
+                  disabled={inviteBusy || !inviteInput.trim()}
+                >
+                  {inviteBusy ? '초대 중...' : '초대'}
+                </button>
+              </div>
+
+              {/* 입력한 아이디가 누구인지 미리 확인 — 잘못된 사람을 초대하지 않도록
+                  버튼 옆 문구가 아니라 눈에 띄는 블록으로 보여준다 */}
+              {lookupState === 'found' && inviteLookup && (
+                <div style={s.lookupHit} role="status">
+                  <span style={s.lookupHitIcon} aria-hidden="true">✓</span>
+                  <span>
+                    <strong style={s.lookupHitName}>{inviteLookup.display}</strong> 님을 초대합니다.
+                    <span style={s.lookupHitNote}>맞는지 확인 후 초대를 눌러주세요.</span>
+                  </span>
+                </div>
+              )}
+              {lookupState === 'checking' && (
+                <div style={s.lookupChecking}>확인 중...</div>
+              )}
+              {lookupState === 'missing' && (
+                <div style={s.lookupMiss}>
+                  <span style={s.lookupMissIcon} aria-hidden="true">!</span>
+                  <span>일치하는 사용자가 없습니다. 아이디 또는 이메일을 확인해주세요.</span>
+                </div>
+              )}
+              {inviteError && <div style={s.collabError}>{inviteError}</div>}
+
+              {collabLoading ? (
+                <div style={s.collabEmpty}>불러오는 중...</div>
+              ) : collaborators.length === 0 ? (
+                <div style={s.collabEmpty}>
+                  아직 공유한 사람이 없습니다. 위에 조교의 아이디나 이메일을 입력해 초대해보세요.
+                </div>
+              ) : (
+                <ul style={s.collabList}>
+                  {collaborators.map(c => (
+                    <li key={c.id} style={s.collabItem}>
+                      <span style={s.collabWho}>{c.display || c.username}</span>
+                      <span style={STATUS_TAG[c.status] || STATUS_TAG.pending}>
+                        {STATUS_LABEL[c.status] || c.status}
+                      </span>
+                      <button
+                        style={s.collabRemoveBtn}
+                        onClick={() => handleRemoveCollaborator(c)}
+                        title={c.status === 'pending' ? '보낸 초대를 취소합니다' : '이 과목에서 내보냅니다'}
+                      >
+                        {c.status === 'pending' ? '초대 취소' : '내보내기'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
 
@@ -1313,10 +1497,74 @@ const s = {
   subjectLabel: { fontSize: 14, fontWeight: 700, color: '#1e293b', whiteSpace: 'nowrap' },
   select: { padding: '7px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none', background: '#fff', cursor: 'pointer' },
   newSubjectBtn: { background: 'none', border: '1px solid #2563eb', color: '#2563eb', borderRadius: 6, padding: '5px 12px', fontSize: 13, cursor: 'pointer', fontWeight: 500 },
-  subjectInfo: { display: 'flex', alignItems: 'center', gap: 8 },
+  subjectInfo: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+
+  collabBtn: {
+    background: 'none', border: '1px solid #e2e8f0', color: '#475569', borderRadius: 6,
+    padding: '5px 12px', fontSize: 13, cursor: 'pointer', fontWeight: 500, whiteSpace: 'nowrap',
+  },
+  collabBtnOn: {
+    background: '#eff6ff', border: '1px solid #2563eb', color: '#1d4ed8', borderRadius: 6,
+    padding: '5px 12px', fontSize: 13, cursor: 'pointer', fontWeight: 700, whiteSpace: 'nowrap',
+  },
+  sharedTag: {
+    fontSize: 12, fontWeight: 700, borderRadius: 4, padding: '3px 8px',
+    background: '#eff6ff', color: '#1d4ed8', whiteSpace: 'nowrap',
+  },
+  collabPanel: {
+    marginTop: 14, padding: 16, borderRadius: 8,
+    background: '#f8fafc', border: '1px solid #e2e8f0',
+    display: 'flex', flexDirection: 'column', gap: 10,
+  },
+  collabHead: { display: 'flex', flexDirection: 'column', gap: 4 },
+  collabTitle: { fontSize: 14, fontWeight: 700, color: '#1e293b', lineHeight: 1.4 },
+  collabHint: { fontSize: 13, color: '#475569', lineHeight: 1.6 },
+  inviteRow: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  inviteInput: {
+    padding: '8px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14,
+    outline: 'none', flex: 1, minWidth: 180, boxSizing: 'border-box',
+  },
+  lookupHit: {
+    display: 'flex', alignItems: 'flex-start', gap: 8,
+    fontSize: 13, color: '#166534', lineHeight: 1.5,
+    background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 8,
+    padding: '10px 12px',
+  },
+  lookupHitIcon: {
+    flexShrink: 0, width: 18, height: 18, borderRadius: '50%',
+    background: '#16a34a', color: '#fff', fontSize: 11, fontWeight: 700,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 1,
+  },
+  lookupHitName: { fontSize: 14, fontWeight: 700, color: '#14532d' },
+  lookupHitNote: { display: 'block', fontSize: 12, color: '#3f6212', marginTop: 2 },
+  lookupChecking: { fontSize: 13, color: '#475569', lineHeight: 1.5, padding: '2px 0' },
+  lookupMiss: {
+    display: 'flex', alignItems: 'flex-start', gap: 8,
+    fontSize: 13, color: '#92400e', lineHeight: 1.5,
+    background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8,
+    padding: '10px 12px',
+  },
+  lookupMissIcon: {
+    flexShrink: 0, width: 18, height: 18, borderRadius: '50%',
+    background: '#d97706', color: '#fff', fontSize: 12, fontWeight: 700,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 1,
+  },
+  collabError: { fontSize: 13, color: '#b91c1c', lineHeight: 1.5 },
+  collabEmpty: { fontSize: 13, color: '#475569', padding: '4px 0', lineHeight: 1.5 },
+  collabList: { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 },
+  collabItem: {
+    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+    background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, padding: '8px 12px',
+  },
+  collabWho: { fontSize: 14, color: '#1e293b', fontWeight: 600, flex: 1, minWidth: 120, wordBreak: 'break-all', lineHeight: 1.5 },
+  collabRemoveBtn: {
+    background: '#fff', border: '1px solid #fecaca', color: '#b91c1c', fontSize: 12,
+    fontWeight: 600, cursor: 'pointer', padding: '8px 12px', lineHeight: 1,
+    borderRadius: 6, whiteSpace: 'nowrap', flexShrink: 0, minHeight: 34,
+  },
   subjectInfoName: { fontSize: 14, fontWeight: 600, color: '#1e293b' },
   subjectInfoCode: { fontSize: 12, background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '2px 8px', fontWeight: 600 },
-  subjectInfoCount: { fontSize: 12, color: '#94a3b8' },
+  subjectInfoCount: { fontSize: 13, color: '#64748b', whiteSpace: 'nowrap' },
   newSubjectForm: { marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
   input: { padding: '8px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: 14, outline: 'none' },
   createBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer' },
@@ -1337,7 +1585,10 @@ const s = {
   itemEditBtn: { position: 'absolute', top: 4, right: 26, background: 'none', border: 'none', color: '#94a3b8', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 },
   itemDeleteBtn: { position: 'absolute', top: 4, right: 4, background: '#f1f5f9', border: 'none', color: '#64748b', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' },
   itemEditHint: { position: 'absolute', top: 4, right: 4, fontSize: 11, color: '#f59e0b' },
-  editSubjectBtn: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, padding: '0 4px', color: '#94a3b8' },
+  editSubjectBtn: {
+    background: 'none', border: '1px solid #e2e8f0', color: '#475569', borderRadius: 6,
+    padding: '5px 12px', fontSize: 13, cursor: 'pointer', fontWeight: 500, whiteSpace: 'nowrap',
+  },
   editItemModeBtn: { background: 'none', border: '1px solid #f59e0b', color: '#d97706', borderRadius: 6, padding: '5px 12px', fontSize: 13, cursor: 'pointer', fontWeight: 500 },
   editItemModeActiveBtn: { background: '#fef3c7', border: '1px solid #f59e0b', color: '#d97706', borderRadius: 6, padding: '5px 12px', fontSize: 13, cursor: 'pointer', fontWeight: 600 },
   editItemBanner: { fontSize: 12, color: '#d97706', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 12px', marginBottom: 10 },

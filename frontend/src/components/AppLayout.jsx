@@ -1,8 +1,9 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../App';
 import { subjectAPI } from '../services/api';
 import ProfileCompleteModal from './ProfileCompleteModal';
+import InvitationModal from './InvitationModal';
 
 // 페이지가 사이드바 가운데 구역에 내용을 렌더링할 수 있는 슬롯.
 // 사용법: const slotNode = useSidebarSlot(); slotNode && createPortal(<내용 />, slotNode)
@@ -16,6 +17,14 @@ export function useSidebarSlot() { return useContext(SidebarSlotContext); }
  */
 const SubjectFilterContext = createContext({ subject: 'all', item: 'all' });
 export function useSubjectFilter() { return useContext(SubjectFilterContext); }
+
+/**
+ * 과목 목록이 바뀐 시점을 알리는 카운터. 초대를 수락하면 새 과목이 생기므로,
+ * 마운트 시 한 번만 목록을 불러오는 화면(업로드 페이지의 과목 드롭다운)이
+ * 이 값을 구독해 다시 불러올 수 있게 한다.
+ */
+const SubjectsVersionContext = createContext(0);
+export function useSubjectsVersion() { return useContext(SubjectsVersionContext); }
 
 const NAV_ITEMS = [
   { path: '/home', icon: '🏠', label: '홈', match: p => p.startsWith('/home') },
@@ -39,6 +48,9 @@ export default function AppLayout() {
   // 접힌 상태에서 마우스를 올리면 임시로 펼침 (마우스가 벗어나면 다시 접힘)
   const [hoverOpen, setHoverOpen] = useState(false);
   const [slotNode, setSlotNode] = useState(null);
+  // 프로필 보완 안내가 떠 있는 동안에는 과목 초대 모달을 미룬다
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [subjectsVersion, setSubjectsVersion] = useState(0);
 
   /* ── 과목 / 세부 항목 필터 ── */
   const [subjects, setSubjects] = useState([]);
@@ -49,11 +61,19 @@ export default function AppLayout() {
     () => sessionStorage.getItem('nav_filter_item') || 'all'
   );
 
-  useEffect(() => {
+  const loadSubjects = useCallback(() => {
     subjectAPI.list()
       .then(res => setSubjects(res.data || []))
       .catch(() => setSubjects([]));
   }, []);
+
+  useEffect(() => { loadSubjects(); }, [loadSubjects]);
+
+  // 초대 수락 — 사이드바뿐 아니라 과목 목록을 쓰는 화면도 함께 갱신되도록 알린다
+  const handleInvitationAccepted = useCallback(() => {
+    loadSubjects();
+    setSubjectsVersion(v => v + 1);
+  }, [loadSubjects]);
 
   // 새로고침해도 선택이 유지되도록 저장 (탭을 닫으면 초기화)
   useEffect(() => {
@@ -96,9 +116,13 @@ export default function AppLayout() {
 
   return (
     <SidebarSlotContext.Provider value={slotNode}>
+     <SubjectsVersionContext.Provider value={subjectsVersion}>
      <SubjectFilterContext.Provider value={filterValue}>
       {/* 기존 계정 프로필 보완 안내 — 로그인 직후 어느 화면에서나 노출된다 */}
-      <ProfileCompleteModal />
+      <ProfileCompleteModal onOpenChange={setProfileModalOpen} />
+      {/* 과목 공유 초대 — 프로필 안내가 떠 있으면 그것부터 끝내게 미룬다.
+          수락하면 사이드바 과목 목록을 즉시 갱신한다 */}
+      <InvitationModal onAccepted={handleInvitationAccepted} paused={profileModalOpen} />
       <div style={s.shell}>
         {/* 본문 자리 확보용 스페이서 (호버 펼침 시에는 좁은 폭 유지 → 본문이 흔들리지 않음) */}
         <div style={{ width: collapsed ? NARROW : WIDE, flexShrink: 0, transition: 'width 0.15s ease' }} />
@@ -236,6 +260,7 @@ export default function AppLayout() {
         </div>
       </div>
      </SubjectFilterContext.Provider>
+     </SubjectsVersionContext.Provider>
     </SidebarSlotContext.Provider>
   );
 }

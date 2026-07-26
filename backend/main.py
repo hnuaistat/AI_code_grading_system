@@ -18,6 +18,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 load_dotenv()
@@ -35,6 +36,7 @@ from schemas import (
     ProblemRevisionRequest, RevisionLogItem, SubjectUpdate, SubjectItemUpdate,
     DecomposeRequest, SessionSubjectItemUpdate, RegradeRequest,
     UpdateEmailRequest, UpdateProfileRequest, AgreeTermsRequest, ChangePasswordRequest,
+    CollaboratorAdd,
     ExcelRevisionChange, ExcelRevisionError, ExcelPreviewResponse,
     ExcelApplyRequest, ExcelApplyResponse
 )
@@ -521,11 +523,88 @@ async def change_password(
 
 # ─── Subjects ──────────────────────────────────────────────────────────────────
 
+def _mask_name(name: Optional[str]) -> Optional[str]:
+    """이름 가운데를 가린다 — 홍길동 → 홍*동, 김철 → 김*, 남궁민수 → 남**수.
+
+    초대할 때 아이디만 보고는 동명이인·오타를 구분할 수 없어 신원 확인용으로
+    함께 보여준다. 전체 이름을 그대로 노출하지 않도록 최소한만 드러낸다.
+    """
+    if not name:
+        return None
+    n = name.strip()
+    if not n:
+        return None
+    if len(n) == 1:
+        return n
+    if len(n) == 2:
+        return n[0] + "*"
+    return n[0] + "*" * (len(n) - 2) + n[-1]
+
+
+def _display_identity(user: models.User) -> str:
+    """whry(홍*동) 형태. 이름이 없으면 아이디만."""
+    masked = _mask_name(user.name)
+    return f"{user.username}({masked})" if masked else user.username
+
+
+def _accessible_subject_ids(user_id: int, db: Session):
+    """소유 + 수락한 협업 과목의 id 서브쿼리.
+
+    pending/declined 는 접근 권한이 없다 — 수락 전에는 남의 과목이 목록에
+    나타나면 안 되고, 거절한 뒤에도 마찬가지다.
+    """
+    owned = db.query(models.Subject.id).filter(models.Subject.user_id == user_id)
+    shared = db.query(models.SubjectCollaborator.subject_id).filter(
+        models.SubjectCollaborator.user_id == user_id,
+        models.SubjectCollaborator.status == "accepted",
+    )
+    return owned.union(shared)
+
+
+def _can_access_subject(subject: models.Subject, user_id: int, db: Session) -> bool:
+    """소유자이거나 수락한 협업자인지."""
+    if subject.user_id == user_id:
+        return True
+    return db.query(models.SubjectCollaborator).filter(
+        models.SubjectCollaborator.subject_id == subject.id,
+        models.SubjectCollaborator.user_id == user_id,
+        models.SubjectCollaborator.status == "accepted",
+    ).first() is not None
+
+
+def _visible_session_filter(user_id: int, db: Session):
+    """내가 채점한 세션 + 접근 가능한 과목에 속한 세션 (목록 조회용)."""
+    return or_(
+        models.GradingSessionDB.user_id == user_id,
+        models.GradingSessionDB.subject_id.in_(_accessible_subject_ids(user_id, db)),
+    )
+
+
+def _can_access_session(db_record, user, db: Session) -> bool:
+    """채점 세션 접근 가능 여부 — 세션 소유자 / 과목 협업자 / admin.
+
+    소유자 없는 과거 세션(user_id=None)은 기존 동작대로 통과시킨다.
+    """
+    if user.get("role") == "admin":
+        return True
+    if db_record.user_id is None:
+        return True
+    if db_record.user_id == user["id"]:
+        return True
+    if db_record.subject_id:
+        subject = db.query(models.Subject).filter(
+            models.Subject.id == db_record.subject_id
+        ).first()
+        if subject and _can_access_subject(subject, user["id"], db):
+            return True
+    return False
+
+
 @app.get("/subjects")
 async def list_subjects(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     subjects = (
         db.query(models.Subject)
-        .filter(models.Subject.user_id == current_user["id"])
+        .filter(models.Subject.id.in_(_accessible_subject_ids(current_user["id"], db)))
         .order_by(models.Subject.created_at)
         .all()
     )
@@ -535,6 +614,7 @@ async def list_subjects(current_user=Depends(get_current_user), db: Session = De
             models.GradingSessionDB.subject_id == s.id
         ).count()
         items = [{"id": item.id, "name": item.name, "created_at": item.created_at.isoformat()} for item in s.items]
+        is_owner = s.user_id == current_user["id"]
         result.append({
             "id": s.id,
             "name": s.name,
@@ -542,6 +622,9 @@ async def list_subjects(current_user=Depends(get_current_user), db: Session = De
             "session_count": count,
             "items": items,
             "created_at": s.created_at.isoformat(),
+            # 공유받은 과목은 협업자 관리 UI를 숨기고 "공유받음" 표시를 위해 구분한다
+            "is_owner": is_owner,
+            "owner_name": None if is_owner else (s.owner.name or s.owner.username),
         })
     return result
 
@@ -570,17 +653,15 @@ async def get_subject(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    subject = db.query(models.Subject).filter(
-        models.Subject.id == subject_id,
-        models.Subject.user_id == current_user["id"]
-    ).first()
-    if not subject:
+    subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
+    if not subject or not _can_access_subject(subject, current_user["id"], db):
         raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
 
     items = [{"id": item.id, "name": item.name, "created_at": item.created_at.isoformat()} for item in subject.items]
     count = db.query(models.GradingSessionDB).filter(
         models.GradingSessionDB.subject_id == subject.id
     ).count()
+    is_owner = subject.user_id == current_user["id"]
     return {
         "id": subject.id,
         "name": subject.name,
@@ -588,6 +669,8 @@ async def get_subject(
         "session_count": count,
         "items": items,
         "created_at": subject.created_at.isoformat(),
+        "is_owner": is_owner,
+        "owner_name": None if is_owner else (subject.owner.name or subject.owner.username),
     }
 
 
@@ -598,11 +681,8 @@ async def create_subject_item(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    subject = db.query(models.Subject).filter(
-        models.Subject.id == subject_id,
-        models.Subject.user_id == current_user["id"]
-    ).first()
-    if not subject:
+    subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
+    if not subject or not _can_access_subject(subject, current_user["id"], db):
         raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
 
     item = models.SubjectItem(subject_id=subject_id, name=body.name)
@@ -619,12 +699,12 @@ async def update_subject(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    subject = db.query(models.Subject).filter(
-        models.Subject.id == subject_id,
-        models.Subject.user_id == current_user["id"]
-    ).first()
-    if not subject:
+    subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
+    if not subject or not _can_access_subject(subject, current_user["id"], db):
         raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
+    # 과목명·코드 변경은 소유자만 — 협업자는 채점 관련 조작만 한다
+    if subject.user_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="과목 정보는 소유자만 수정할 수 있습니다")
 
     if body.name is not None:
         subject.name = body.name
@@ -648,11 +728,8 @@ async def update_subject_item(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    subject = db.query(models.Subject).filter(
-        models.Subject.id == subject_id,
-        models.Subject.user_id == current_user["id"]
-    ).first()
-    if not subject:
+    subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
+    if not subject or not _can_access_subject(subject, current_user["id"], db):
         raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
 
     item = db.query(models.SubjectItem).filter(
@@ -675,11 +752,8 @@ async def delete_subject_item(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    subject = db.query(models.Subject).filter(
-        models.Subject.id == subject_id,
-        models.Subject.user_id == current_user["id"]
-    ).first()
-    if not subject:
+    subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
+    if not subject or not _can_access_subject(subject, current_user["id"], db):
         raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
 
     item = db.query(models.SubjectItem).filter(
@@ -692,6 +766,223 @@ async def delete_subject_item(
     db.delete(item)
     db.commit()
     return {"message": "항목이 삭제되었습니다"}
+
+
+# ─── 과목 협업자 (조교 초대) ───────────────────────────────────────────────────
+
+def _owned_subject_or_404(subject_id: int, user_id: int, db: Session) -> models.Subject:
+    """협업자 관리는 소유자 전용."""
+    subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
+    if subject.user_id != user_id:
+        raise HTTPException(status_code=403, detail="과목 소유자만 관리할 수 있습니다")
+    return subject
+
+
+def _collaborator_payload(c: models.SubjectCollaborator) -> dict:
+    return {
+        "id": c.id,
+        "user_id": c.user_id,
+        "username": c.user.username,
+        "display": _display_identity(c.user),
+        "masked_name": _mask_name(c.user.name),
+        "email": c.user.email,
+        "role": c.user.role,
+        "status": c.status,
+        "invited_by": c.invited_by,
+        "created_at": c.created_at.isoformat(),
+        "responded_at": c.responded_at.isoformat() if c.responded_at else None,
+    }
+
+
+@app.get("/subjects/{subject_id}/collaborators")
+async def list_collaborators(
+    subject_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """협업자 목록 — 대기/수락/거절 전부 보여준다 (소유자만)."""
+    _owned_subject_or_404(subject_id, current_user["id"], db)
+    rows = (
+        db.query(models.SubjectCollaborator)
+        .filter(models.SubjectCollaborator.subject_id == subject_id)
+        .order_by(models.SubjectCollaborator.created_at)
+        .all()
+    )
+    return [_collaborator_payload(c) for c in rows]
+
+
+@app.get("/users/lookup")
+async def lookup_user(
+    identifier: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """초대 전 신원 확인용 — 아이디/이메일로 찾아 whry(홍*동) 형태로 돌려준다.
+
+    이름 전체를 노출하지 않으려고 가운데를 가린다. 동명이인이나 오타를
+    "이 사람이 맞나" 정도로 확인하는 용도.
+    """
+    key = (identifier or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="아이디 또는 이메일을 입력해주세요")
+
+    user = db.query(models.User).filter(
+        or_(models.User.username == key, models.User.email == key)
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "masked_name": _mask_name(user.name),
+        "display": _display_identity(user),
+        "role": user.role,
+    }
+
+
+@app.post("/subjects/{subject_id}/collaborators")
+async def add_collaborator(
+    subject_id: int,
+    body: CollaboratorAdd,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """아이디/이메일로 찾아 초대한다. 수락 전까지는 pending 상태."""
+    _owned_subject_or_404(subject_id, current_user["id"], db)
+
+    key = (body.identifier or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="아이디 또는 이메일을 입력해주세요")
+
+    target = db.query(models.User).filter(
+        or_(models.User.username == key, models.User.email == key)
+    ).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    if target.id == current_user["id"]:
+        raise HTTPException(status_code=400, detail="본인은 초대할 수 없습니다")
+
+    existing = db.query(models.SubjectCollaborator).filter(
+        models.SubjectCollaborator.subject_id == subject_id,
+        models.SubjectCollaborator.user_id == target.id,
+    ).first()
+    if existing:
+        if existing.status in ("pending", "accepted"):
+            raise HTTPException(status_code=400, detail="이미 초대되었거나 참여 중인 사용자입니다")
+        # 거절했던 사람은 다시 초대할 수 있다
+        existing.status = "pending"
+        existing.responded_at = None
+        existing.invited_by = current_user["id"]
+        existing.created_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return _collaborator_payload(existing)
+
+    row = models.SubjectCollaborator(
+        subject_id=subject_id,
+        user_id=target.id,
+        invited_by=current_user["id"],
+        status="pending",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _collaborator_payload(row)
+
+
+@app.delete("/subjects/{subject_id}/collaborators/{user_id}")
+async def remove_collaborator(
+    subject_id: int,
+    user_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """참여 중인 협업자를 내보내거나, 대기 중인 초대를 취소한다 (소유자만)."""
+    _owned_subject_or_404(subject_id, current_user["id"], db)
+
+    row = db.query(models.SubjectCollaborator).filter(
+        models.SubjectCollaborator.subject_id == subject_id,
+        models.SubjectCollaborator.user_id == user_id,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="해당 협업자를 찾을 수 없습니다")
+
+    db.delete(row)
+    db.commit()
+    return {"message": "협업자가 제거되었습니다"}
+
+
+# ─── 내가 받은 초대 ────────────────────────────────────────────────────────────
+
+@app.get("/me/invitations")
+async def list_my_invitations(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """수락 대기 중인 초대만 반환."""
+    rows = (
+        db.query(models.SubjectCollaborator)
+        .filter(
+            models.SubjectCollaborator.user_id == current_user["id"],
+            models.SubjectCollaborator.status == "pending",
+        )
+        .order_by(models.SubjectCollaborator.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": c.id,
+            "subject_id": c.subject_id,
+            "subject_name": c.subject.name,
+            "subject_code": c.subject.code,
+            "invited_by_username": c.inviter.username,
+            "invited_by_name": c.inviter.name,
+            "invited_by_display": _display_identity(c.inviter),
+            "created_at": c.created_at.isoformat(),
+        }
+        for c in rows
+    ]
+
+
+def _my_pending_invitation(collaborator_id: int, user_id: int, db: Session):
+    """본인에게 온 대기 중 초대만 응답할 수 있다."""
+    row = db.query(models.SubjectCollaborator).filter(
+        models.SubjectCollaborator.id == collaborator_id
+    ).first()
+    if not row or row.user_id != user_id:
+        raise HTTPException(status_code=404, detail="초대를 찾을 수 없습니다")
+    if row.status != "pending":
+        raise HTTPException(status_code=400, detail="이미 응답한 초대입니다")
+    return row
+
+
+@app.post("/me/invitations/{collaborator_id}/accept")
+async def accept_invitation(
+    collaborator_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = _my_pending_invitation(collaborator_id, current_user["id"], db)
+    row.status = "accepted"
+    row.responded_at = datetime.utcnow()
+    db.commit()
+    return {"message": "초대를 수락했습니다", "subject_id": row.subject_id}
+
+
+@app.post("/me/invitations/{collaborator_id}/decline")
+async def decline_invitation(
+    collaborator_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = _my_pending_invitation(collaborator_id, current_user["id"], db)
+    row.status = "declined"
+    row.responded_at = datetime.utcnow()
+    db.commit()
+    return {"message": "초대를 거절했습니다"}
 
 
 # ─── LLM 모델 목록 ─────────────────────────────────────────────────────────────
@@ -784,6 +1075,12 @@ async def start_grading(
 
     if not student_notebooks:
         raise HTTPException(status_code=400, detail="제출물에서 .ipynb 파일을 찾을 수 없습니다")
+
+    # 과목을 지정했다면 접근 권한 확인 — 소유자이거나 수락한 협업자여야 한다
+    if subject_id:
+        subject = db.query(models.Subject).filter(models.Subject.id == subject_id).first()
+        if not subject or not _can_access_subject(subject, current_user["id"], db):
+            raise HTTPException(status_code=404, detail="과목을 찾을 수 없습니다")
 
     session_id = str(uuid.uuid4())
     session = GradingSession(
@@ -1367,9 +1664,10 @@ async def get_history(
     # model ID → label 매핑
     model_label_map = {m["id"]: m["label"] for m in AVAILABLE_MODELS}
 
+    # 공유받은 과목의 세션도 함께 보인다 (협업의 핵심)
     records = (
         db.query(models.GradingSessionDB)
-        .filter(models.GradingSessionDB.user_id == current_user["id"])
+        .filter(_visible_session_filter(current_user["id"], db))
         .order_by(models.GradingSessionDB.created_at.desc())
         .all()
     )
@@ -1461,7 +1759,7 @@ async def get_dashboard_summary(
 
     records = (
         db.query(models.GradingSessionDB)
-        .filter(models.GradingSessionDB.user_id == current_user["id"])
+        .filter(_visible_session_filter(current_user["id"], db))
         .order_by(models.GradingSessionDB.created_at.desc())
         .all()
     )
@@ -1554,10 +1852,9 @@ async def update_session_subject_item(
     """채점 완료된 세션의 세부 항목을 추가/수정한다.
     이름이 같은 항목이 과목에 이미 있으면 재사용, 없으면 새로 생성. 빈 문자열이면 해제."""
     record = db.query(models.GradingSessionDB).filter(
-        models.GradingSessionDB.id == session_id,
-        models.GradingSessionDB.user_id == current_user["id"]
+        models.GradingSessionDB.id == session_id
     ).first()
-    if not record:
+    if not record or not _can_access_session(record, current_user, db):
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
 
     name = body.subject_item_name.strip()
@@ -1594,10 +1891,9 @@ async def regrade_session(
     """저장된 입력(루브릭+정답+학생 데이터)으로 다른 모델 재채점.
     기존 세션은 보존하고 새 세션을 생성하며, regraded_from으로 원본(루트)을 참조."""
     orig = db.query(models.GradingSessionDB).filter(
-        models.GradingSessionDB.id == session_id,
-        models.GradingSessionDB.user_id == current_user["id"]
+        models.GradingSessionDB.id == session_id
     ).first()
-    if not orig:
+    if not orig or not _can_access_session(orig, current_user, db):
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
     if orig.status != "completed":
         raise HTTPException(status_code=400, detail="완료된 세션만 재채점할 수 있습니다")
@@ -1655,15 +1951,20 @@ async def regrade_session(
 
 @app.get("/grading/session/{session_id}/results")
 async def get_results(session_id: str, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    # 권한 검사는 DB 레코드 기준으로 한 번만 한다. 인메모리 세션으로 응답하는
+    # 경로에도 반드시 적용해야 세션 ID만 아는 제3자가 결과를 읽지 못한다
+    db_record = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.id == session_id
+    ).first()
+    if db_record and not _can_access_session(db_record, current_user, db):
+        raise HTTPException(status_code=403, detail="해당 채점 세션의 조회 권한이 없습니다")
+
     session = grading_sessions.get(session_id)
     if session:
         if session.status != "completed":
             raise HTTPException(status_code=400, detail="채점이 아직 완료되지 않았습니다")
         return session.results
 
-    db_record = db.query(models.GradingSessionDB).filter(
-        models.GradingSessionDB.id == session_id
-    ).first()
     if not db_record or db_record.status != "completed":
         raise HTTPException(status_code=400, detail="채점이 완료되지 않았습니다")
 
@@ -1930,10 +2231,11 @@ async def revise_problem_score(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """교수가 점수 또는 코멘트를 수정. 이력은 자동 기록됨."""
-    # 1. 권한 확인 (교수 또는 관리자만)
-    if current_user.get("role") not in ("professor", "admin"):
-        raise HTTPException(status_code=403, detail="교수 권한이 필요합니다")
+    """교수·조교가 점수 또는 코멘트를 수정. 이력은 자동 기록됨."""
+    # 1. 권한 확인 — 조교도 협업 과목에서는 수정 가능하므로 역할로 막지 않고
+    #    아래 3번의 세션 접근 검사에 맡긴다
+    if current_user.get("role") not in ("professor", "admin", "ta"):
+        raise HTTPException(status_code=403, detail="채점 수정 권한이 필요합니다")
 
     # 2. DB 세션 가져오기
     db_record = db.query(models.GradingSessionDB).filter(
@@ -1942,8 +2244,8 @@ async def revise_problem_score(
     if not db_record or not db_record.results_json:
         raise HTTPException(status_code=404, detail="채점 세션을 찾을 수 없습니다")
 
-    # 3. 세션 소유자 확인 (해당 강의 교수만)
-    if db_record.user_id and db_record.user_id != current_user["id"] and current_user.get("role") != "admin":
+    # 3. 세션 소유자 또는 과목 협업자 확인
+    if not _can_access_session(db_record, current_user, db):
         raise HTTPException(status_code=403, detail="해당 채점 세션의 수정 권한이 없습니다")
 
     # 4. 결과 파싱 후 수정 적용
@@ -2100,8 +2402,8 @@ async def download_excel(
     if not db_record or db_record.status != "completed":
         raise HTTPException(status_code=400, detail="채점이 완료되지 않았습니다")
 
-    # 세션 소유자 확인 (업로드·수정과 동일한 기준)
-    if db_record.user_id and db_record.user_id != current_user["id"] and current_user.get("role") != "admin":
+    # 세션 소유자 또는 과목 협업자 확인 (업로드·수정과 동일한 기준)
+    if not _can_access_session(db_record, current_user, db):
         raise HTTPException(status_code=403, detail="해당 채점 세션의 조회 권한이 없습니다")
 
     # 원본 AI 점수: 인메모리 우선(수정 전 원점수), 없으면 DB
@@ -2597,8 +2899,10 @@ def _purge_expired_previews():
 
 def _load_session_for_revision(session_id: str, current_user, db):
     """엑셀 반영용 세션 조회 + 권한 검사 (/revise와 동일한 3단 검사)."""
-    if current_user.get("role") not in ("professor", "admin"):
-        raise HTTPException(status_code=403, detail="교수 권한이 필요합니다")
+    # 조교(ta)도 협업 과목에서는 점수를 고칠 수 있어야 하므로 역할만으로 막지 않는다.
+    # 실제 접근 가능 여부는 아래 _can_access_session 이 판단한다
+    if current_user.get("role") not in ("professor", "admin", "ta"):
+        raise HTTPException(status_code=403, detail="채점 수정 권한이 필요합니다")
 
     db_record = db.query(models.GradingSessionDB).filter(
         models.GradingSessionDB.id == session_id
@@ -2606,7 +2910,7 @@ def _load_session_for_revision(session_id: str, current_user, db):
     if not db_record or not db_record.results_json:
         raise HTTPException(status_code=404, detail="채점 세션을 찾을 수 없습니다")
 
-    if db_record.user_id and db_record.user_id != current_user["id"] and current_user.get("role") != "admin":
+    if not _can_access_session(db_record, current_user, db):
         raise HTTPException(status_code=403, detail="해당 채점 세션의 수정 권한이 없습니다")
 
     return db_record

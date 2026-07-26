@@ -11,7 +11,7 @@ import { TERMS_OF_SERVICE, PRIVACY_REQUIRED, PRIVACY_OPTIONAL } from '../constan
  * '나중에 하기'로 닫을 수 있고, 7일 뒤 다시 뜬다 (노출 조건은 백엔드가 판단).
  * 기존 계정이 전원 입력을 마치면 이 컴포넌트와 name 폴백을 함께 제거할 수 있다.
  */
-export default function ProfileCompleteModal() {
+export default function ProfileCompleteModal({ onOpenChange }) {
   const { user, refreshUser } = useAuth();
   const [status, setStatus] = useState(null);
   const [name, setName] = useState('');
@@ -42,6 +42,11 @@ export default function ProfileCompleteModal() {
   }, [user]);
 
   const open = !!status?.should_prompt;
+
+  // 다른 안내 모달(과목 초대)이 겹쳐 뜨지 않도록 열림 상태를 상위에 알린다
+  useEffect(() => {
+    if (onOpenChange) onOpenChange(open);
+  }, [open, onOpenChange]);
 
   // 모달이 떠 있는 동안 배경 스크롤을 막는다
   useEffect(() => {
