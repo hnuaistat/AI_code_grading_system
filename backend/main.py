@@ -4,6 +4,7 @@ import json
 import uuid
 import asyncio
 import io
+import hashlib
 import unicodedata
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -33,7 +34,9 @@ from schemas import (
     StudentResult, SubjectCreate, SubjectResponse, HistorySessionItem, SubjectItemCreate,
     ProblemRevisionRequest, RevisionLogItem, SubjectUpdate, SubjectItemUpdate,
     DecomposeRequest, SessionSubjectItemUpdate, RegradeRequest,
-    UpdateEmailRequest, ChangePasswordRequest
+    UpdateEmailRequest, ChangePasswordRequest,
+    ExcelRevisionChange, ExcelRevisionError, ExcelPreviewResponse,
+    ExcelApplyRequest, ExcelApplyResponse
 )
 from services.notebook_service import (
     extract_notebooks_from_zip, parse_student_id_from_filename,
@@ -64,6 +67,10 @@ grading_sessions: Dict[str, GradingSession] = {}
 
 # 강제 중단 요청된 세션 id (background task 다음 iteration에서 종료)
 cancelled_sessions: Set[str] = set()
+
+# 엑셀 업로드 미리보기 임시 보관 (preview_id -> 변경사항). TTL 10분.
+# 화면에서 확인한 변경만 반영되도록 서버가 들고 있는다 (클라이언트가 값을 조작할 수 없게).
+excel_previews: Dict[str, dict] = {}
 
 
 # ─── Startup ───────────────────────────────────────────────────────────────────
@@ -1661,6 +1668,181 @@ async def delete_session(
     return {"message": "채점 기록이 삭제되었습니다"}
 
 
+# ── 엑셀 왕복 수정(다운로드 → 수정 → 업로드 → 반영) 공용 상수 ──────────────
+# 다운로드와 업로드 파서가 같은 이름을 봐야 하므로 상수로 고정한다.
+EXCEL_REVISION_SHEET = "AI분석결과"
+EXCEL_ROWKEY_HEADER = "행키"
+EXCEL_SCORE_HEADER = "수정점수"
+EXCEL_COMMENT_HEADER = "교수코멘트"
+# 교수코멘트를 지우겠다는 의사표시. 빈칸은 "변경 없음"이라 삭제와 구분이 필요하다.
+EXCEL_COMMENT_DELETE = "-"
+
+
+def _build_row_key_prefix(session_id: str, results_json: str) -> str:
+    """행키 앞부분 `{세션8자}-{결과해시12자}`.
+
+    세션 부분은 다른 세션의 엑셀을 잘못 올리는 사고를 막고,
+    해시 부분은 다운로드 이후 웹에서 점수가 바뀐(stale) 파일을 감지한다.
+    """
+    snapshot = hashlib.sha256((results_json or "").encode("utf-8")).hexdigest()[:12]
+    return f"{session_id[:8]}-{snapshot}"
+
+
+class RevisionError(Exception):
+    """점수 수정 중 발생한 검증 오류. 라우트에서는 400으로, 배치에서는 행 단위 오류로 처리."""
+    pass
+
+
+def _apply_problem_revision(
+    session_id: str,
+    results: list,
+    student_filename: str,
+    problem_id,
+    revised_by: int,
+    obtained_score: float = None,
+    professor_feedback: str = None,
+    partial_scores: list = None,
+    student_ref: dict = None,
+):
+    """한 문제의 점수/코멘트를 수정하고 ProblemRevisionLog 목록을 만든다.
+
+    results를 in-place로 수정하며 DB 커밋은 하지 않는다 (호출자 책임).
+    엑셀 일괄 반영에서는 파싱/직렬화/커밋을 한 번만 하기 위해 이 형태로 분리했다.
+
+    partial_scores: [{"index": int, "score": float, "reason": str|None}, ...]
+        전체 배열이 아니라 "수정할 인덱스만" 담는다 (엑셀은 일부 행만 수정되므로).
+    student_ref: 이미 찾은 학생 dict. 배치에서 선형 탐색을 건너뛰기 위한 최적화.
+
+    반환: (revision_logs, target_student, target_problem)
+    """
+    # 1. 해당 학생/문제 찾기
+    target_student = student_ref
+    if target_student is None:
+        for student in results:
+            if student.get("filename") == student_filename:
+                target_student = student
+                break
+
+    target_problem = None
+    if target_student:
+        for p in target_student.get("problems", []):
+            if str(p.get("problem_id")) == str(problem_id):
+                target_problem = p
+                break
+
+    if not target_student or not target_problem:
+        raise RevisionError("해당 학생/문제를 찾을 수 없습니다")
+
+    full_score = float(target_problem.get("full_score", 0))
+    revision_logs = []
+
+    # 2-A. partial_scores 수정 (각 세부 항목)
+    if partial_scores is not None:
+        existing_partials = target_problem.get("partial_scores", [])
+        for new_ps in partial_scores:
+            i = new_ps["index"]
+            if i >= len(existing_partials):
+                continue
+            old_ps = existing_partials[i]
+            max_score = float(old_ps.get("max_score", 0))
+
+            if new_ps.get("score") is not None:
+                new_score = float(new_ps["score"])
+
+                # 점수 범위 검증: 0 ~ max_score
+                if new_score < 0 or new_score > max_score:
+                    raise RevisionError(
+                        f"세부 점수는 0 ~ {max_score}점 범위여야 합니다 (입력값: {new_score})"
+                    )
+
+                # 점수 변경 시 이력 기록
+                if old_ps.get("score") != new_score:
+                    revision_logs.append(models.ProblemRevisionLog(
+                        session_id=session_id,
+                        student_filename=student_filename,
+                        problem_id=str(problem_id),
+                        field_name="partial_score",
+                        partial_score_index=i,
+                        old_value=str(old_ps.get("score")),
+                        new_value=str(new_score),
+                        revised_by=revised_by,
+                    ))
+                    existing_partials[i]["score"] = new_score
+
+            # 사유 변경 시 이력 기록
+            new_reason = new_ps.get("reason")
+            if new_reason and old_ps.get("reason") != new_reason:
+                revision_logs.append(models.ProblemRevisionLog(
+                    session_id=session_id,
+                    student_filename=student_filename,
+                    problem_id=str(problem_id),
+                    field_name="partial_reason",
+                    partial_score_index=i,
+                    old_value=old_ps.get("reason"),
+                    new_value=new_reason,
+                    revised_by=revised_by,
+                ))
+                existing_partials[i]["reason"] = new_reason
+
+        # 세부 항목 합계로 obtained_score 자동 재계산
+        target_problem["obtained_score"] = round(sum(p.get("score", 0) for p in existing_partials), 2)
+
+    # 2-B. obtained_score 직접 수정 (세부 항목이 없는 경우만)
+    elif obtained_score is not None:
+        if not target_problem.get("partial_scores"):
+            new_score = float(obtained_score)
+            if new_score < 0 or new_score > full_score:
+                raise RevisionError(
+                    f"점수는 0 ~ {full_score}점 범위여야 합니다 (입력값: {new_score})"
+                )
+            old_score = target_problem.get("obtained_score")
+            if old_score != new_score:
+                revision_logs.append(models.ProblemRevisionLog(
+                    session_id=session_id,
+                    student_filename=student_filename,
+                    problem_id=str(problem_id),
+                    field_name="obtained_score",
+                    old_value=str(old_score),
+                    new_value=str(new_score),
+                    revised_by=revised_by,
+                ))
+                target_problem["obtained_score"] = new_score
+        else:
+            raise RevisionError(
+                "세부 항목이 있는 문제는 obtained_score를 직접 수정할 수 없습니다 (partial_scores를 수정하세요)"
+            )
+
+    # 2-C. 교수 코멘트 수정
+    if professor_feedback is not None:
+        old_feedback = target_problem.get("professor_feedback")
+        if old_feedback != professor_feedback:
+            revision_logs.append(models.ProblemRevisionLog(
+                session_id=session_id,
+                student_filename=student_filename,
+                problem_id=str(problem_id),
+                field_name="professor_feedback",
+                old_value=old_feedback,
+                new_value=professor_feedback,
+                revised_by=revised_by,
+            ))
+            target_problem["professor_feedback"] = professor_feedback
+
+    # 3. 수정 표시 + 학생 총점 재계산
+    if revision_logs:
+        target_problem["is_revised"] = True
+        target_problem["revised_at"] = datetime.utcnow().isoformat()
+        # 부분점수 항목 재감지 (0 < score < max_score)
+        target_problem["has_partial_score"] = any(
+            0 < float(ps.get("score", 0)) < float(ps.get("max_score", 0))
+            for ps in target_problem.get("partial_scores", [])
+        )
+        target_student["total_score"] = round(
+            sum(p.get("obtained_score", 0) for p in target_student.get("problems", [])), 2
+        )
+
+    return revision_logs, target_student, target_problem
+
+
 @app.patch("/grading/session/{session_id}/revise")
 async def revise_problem_score(
     session_id: str,
@@ -1684,129 +1866,35 @@ async def revise_problem_score(
     if db_record.user_id and db_record.user_id != current_user["id"] and current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="해당 채점 세션의 수정 권한이 없습니다")
 
-    # 4. 결과 파싱 후 해당 학생/문제 찾기
+    # 4. 결과 파싱 후 수정 적용
     results = json.loads(db_record.results_json)
-    target_student = None
-    target_problem = None
-    for student in results:
-        if student.get("filename") == revision.student_filename:
-            target_student = student
-            for p in student.get("problems", []):
-                if str(p.get("problem_id")) == str(revision.problem_id):
-                    target_problem = p
-                    break
-            break
 
-    if not target_student or not target_problem:
-        raise HTTPException(status_code=404, detail="해당 학생/문제를 찾을 수 없습니다")
-
-    full_score = float(target_problem.get("full_score", 0))
-    revision_logs = []
-
-    # 5-A. partial_scores 수정 (각 세부 항목)
+    # 요청의 partial_scores(전체 배열)를 {인덱스, 값} 형태로 변환
+    partial_updates = None
     if revision.partial_scores is not None:
-        existing_partials = target_problem.get("partial_scores", [])
-        for i, new_ps in enumerate(revision.partial_scores):
-            if i >= len(existing_partials):
-                continue
-            old_ps = existing_partials[i]
-            max_score = float(old_ps.get("max_score", 0))
-            new_score = float(new_ps.score)
+        partial_updates = [
+            {"index": i, "score": ps.score, "reason": ps.reason}
+            for i, ps in enumerate(revision.partial_scores)
+        ]
 
-            # 점수 범위 검증: 0 ~ max_score
-            if new_score < 0 or new_score > max_score:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"세부 점수는 0 ~ {max_score}점 범위여야 합니다 (입력값: {new_score})"
-                )
+    try:
+        revision_logs, target_student, target_problem = _apply_problem_revision(
+            session_id=session_id,
+            results=results,
+            student_filename=revision.student_filename,
+            problem_id=revision.problem_id,
+            revised_by=current_user["id"],
+            obtained_score=revision.obtained_score,
+            professor_feedback=revision.professor_feedback,
+            partial_scores=partial_updates,
+        )
+    except RevisionError as e:
+        msg = str(e)
+        status = 404 if "찾을 수 없습니다" in msg else 400
+        raise HTTPException(status_code=status, detail=msg)
 
-            # 점수 변경 시 이력 기록
-            if old_ps.get("score") != new_score:
-                revision_logs.append(models.ProblemRevisionLog(
-                    session_id=session_id,
-                    student_filename=revision.student_filename,
-                    problem_id=str(revision.problem_id),
-                    field_name="partial_score",
-                    partial_score_index=i,
-                    old_value=str(old_ps.get("score")),
-                    new_value=str(new_score),
-                    revised_by=current_user["id"],
-                ))
-                existing_partials[i]["score"] = new_score
-
-            # 사유 변경 시 이력 기록
-            if new_ps.reason and old_ps.get("reason") != new_ps.reason:
-                revision_logs.append(models.ProblemRevisionLog(
-                    session_id=session_id,
-                    student_filename=revision.student_filename,
-                    problem_id=str(revision.problem_id),
-                    field_name="partial_reason",
-                    partial_score_index=i,
-                    old_value=old_ps.get("reason"),
-                    new_value=new_ps.reason,
-                    revised_by=current_user["id"],
-                ))
-                existing_partials[i]["reason"] = new_ps.reason
-
-        # 세부 항목 합계로 obtained_score 자동 재계산
-        target_problem["obtained_score"] = round(sum(p.get("score", 0) for p in existing_partials), 2)
-
-    # 5-B. obtained_score 직접 수정 (세부 항목이 없는 경우만)
-    elif revision.obtained_score is not None:
-        if not target_problem.get("partial_scores"):
-            new_score = float(revision.obtained_score)
-            if new_score < 0 or new_score > full_score:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"점수는 0 ~ {full_score}점 범위여야 합니다 (입력값: {new_score})"
-                )
-            old_score = target_problem.get("obtained_score")
-            if old_score != new_score:
-                revision_logs.append(models.ProblemRevisionLog(
-                    session_id=session_id,
-                    student_filename=revision.student_filename,
-                    problem_id=str(revision.problem_id),
-                    field_name="obtained_score",
-                    old_value=str(old_score),
-                    new_value=str(new_score),
-                    revised_by=current_user["id"],
-                ))
-                target_problem["obtained_score"] = new_score
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="세부 항목이 있는 문제는 obtained_score를 직접 수정할 수 없습니다 (partial_scores를 수정하세요)"
-            )
-
-    # 5-C. 교수 코멘트 수정
-    if revision.professor_feedback is not None:
-        old_feedback = target_problem.get("professor_feedback")
-        if old_feedback != revision.professor_feedback:
-            revision_logs.append(models.ProblemRevisionLog(
-                session_id=session_id,
-                student_filename=revision.student_filename,
-                problem_id=str(revision.problem_id),
-                field_name="professor_feedback",
-                old_value=old_feedback,
-                new_value=revision.professor_feedback,
-                revised_by=current_user["id"],
-            ))
-            target_problem["professor_feedback"] = revision.professor_feedback
-
-    # 6. 수정 표시 + 학생 총점 재계산
+    # 5. DB 저장
     if revision_logs:
-        target_problem["is_revised"] = True
-        target_problem["revised_at"] = datetime.utcnow().isoformat()
-        # 부분점수 항목 재감지 (0 < score < max_score)
-        target_problem["has_partial_score"] = any(
-            0 < float(ps.get("score", 0)) < float(ps.get("max_score", 0))
-            for ps in target_problem.get("partial_scores", [])
-        )
-        target_student["total_score"] = round(
-            sum(p.get("obtained_score", 0) for p in target_student.get("problems", [])), 2
-        )
-
-        # 7. DB 저장
         db_record.results_json = json.dumps(results, ensure_ascii=False)
         for log in revision_logs:
             db.add(log)
@@ -1932,6 +2020,10 @@ async def download_excel(
     if not db_record or db_record.status != "completed":
         raise HTTPException(status_code=400, detail="채점이 완료되지 않았습니다")
 
+    # 세션 소유자 확인 (업로드·수정과 동일한 기준)
+    if db_record.user_id and db_record.user_id != current_user["id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="해당 채점 세션의 조회 권한이 없습니다")
+
     # 원본 AI 점수: 인메모리 우선(수정 전 원점수), 없으면 DB
     mem_session = grading_sessions.get(session_id)
     if mem_session and mem_session.status == "completed":
@@ -1958,6 +2050,8 @@ async def download_excel(
     # AI 오류 = 노란색 / 부분점수 = 파란색 (UI와 동일한 색상 컨벤션)
     ai_error_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")
     partial_score_fill = PatternFill(start_color="DBEAFE", end_color="DBEAFE", fill_type="solid")
+    # 교수가 값을 입력할 칸(수정점수·교수코멘트) 표시용 연노랑
+    input_fill = PatternFill(start_color="FEF9C3", end_color="FEF9C3", fill_type="solid")
     center_align = Alignment(horizontal="center", vertical="center")
     wrap_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
     thin_border = Border(
@@ -2038,48 +2132,97 @@ async def download_excel(
 
     apply_sheet_style(ws1, original_results, headers1)
 
-    # ── Sheet 2: AI 분석결과 (세부 채점항목) ─────────────────────────────
+    # ── Sheet 2: AI 분석결과 (세부 채점항목) — 엑셀 수정·업로드 대상 시트 ──
+    # 이 시트의 "수정점수"·"교수코멘트" 칸을 채워 업로드하면 점수가 반영된다.
+    # 행키(A열, 숨김)로 학생/문제/채점항목을 식별하므로 정렬·행삭제·컬럼이동에 안전하다.
+    # 현재 DB 점수(revised_results) 기준으로 쓴다 — 업로드 시 반영 대상이 DB이므로
+    # 화면에 보이는 값과 반영 기준값이 어긋나지 않아야 한다.
     ws2 = wb.create_sheet("AI분석결과")
-    detail_headers = ["학번", "이름", "문제", "최대점수", "획득점수", "채점항목", "학생답변", "AI피드백", "AI종합피드백"]
+    detail_headers = [
+        EXCEL_ROWKEY_HEADER, "학번", "이름", "문제", "채점항목", "최대점수",
+        "현재점수", EXCEL_SCORE_HEADER, EXCEL_COMMENT_HEADER,
+        "학생답변", "AI피드백", "AI종합피드백",
+    ]
+    editable_cols = {8, 9}  # 수정점수, 교수코멘트
     for col, h in enumerate(detail_headers, 1):
         cell = ws2.cell(row=1, column=col, value=h)
         cell.font = header_font
-        cell.fill = ai_fill
+        # 교수가 입력할 두 컬럼은 초록 헤더로 구분
+        cell.fill = revised_fill if col in editable_cols else ai_fill
         cell.alignment = center_align
         cell.border = thin_border
 
+    row_key_prefix = _build_row_key_prefix(session_id, db_record.results_json)
+
     row = 2
-    for student in original_results:
+    for stu_idx, student in enumerate(revised_results):
         for problem in student.problems:
             student_answer = unicodedata.normalize("NFC", "\n\n".join(
                 c.source for c in problem.code_cells if c.source.strip()
             )) if problem.code_cells else ""
-            for ps_idx, ps in enumerate(problem.partial_scores):
-                ws2.cell(row=row, column=1, value=student.student_id).alignment = center_align
-                ws2.cell(row=row, column=2, value=student.student_name or "").alignment = center_align
-                ws2.cell(row=row, column=3, value=f"Q{problem.problem_id}").alignment = center_align
-                ws2.cell(row=row, column=4, value=ps.max_score).alignment = center_align
-                score_cell = ws2.cell(row=row, column=5, value=ps.score)
+
+            # 세부 항목이 없는 문항(= 미제출로 0점 처리)도 반드시 1행을 만든다.
+            # 이 행이 없으면 교수가 엑셀에서 그 문항의 0점 사유를 볼 수도, 고칠 수도 없다.
+            partials = problem.partial_scores or []
+            if partials:
+                rows_spec = [
+                    (i, ps.item, ps.max_score, ps.score, ps.reason)
+                    for i, ps in enumerate(partials)
+                ]
+            else:
+                rows_spec = [(-1, "(세부 항목 없음 — 문제 전체 점수)",
+                              problem.full_score, problem.obtained_score, "")]
+
+            for spec_idx, (ps_idx, item, max_score, score, reason) in enumerate(rows_spec):
+                key_cell = ws2.cell(
+                    row=row, column=1,
+                    value=f"{row_key_prefix}|{stu_idx}|{problem.problem_id}|{ps_idx}"
+                )
+                key_cell.alignment = center_align
+                ws2.cell(row=row, column=2, value=student.student_id).alignment = center_align
+                ws2.cell(row=row, column=3, value=student.student_name or "").alignment = center_align
+                ws2.cell(row=row, column=4, value=f"Q{problem.problem_id}").alignment = center_align
+                ws2.cell(row=row, column=5, value=item).alignment = wrap_align
+                ws2.cell(row=row, column=6, value=max_score).alignment = center_align
+
+                score_cell = ws2.cell(row=row, column=7, value=score)
                 score_cell.alignment = center_align
-                # 획득점수 컬럼 색상: AI 오류(노랑) > 부분점수(파랑) 우선순위
+                # 현재점수 컬럼 색상: AI 오류(노랑) > 부분점수(파랑) 우선순위
                 if problem.has_ai_error:
                     score_cell.fill = ai_error_fill
-                elif 0 < float(ps.score) < float(ps.max_score):
+                elif 0 < float(score) < float(max_score):
                     score_cell.fill = partial_score_fill
-                ws2.cell(row=row, column=6, value=ps.item).alignment = wrap_align
-                if ps_idx == 0:
-                    ws2.cell(row=row, column=7, value=student_answer).alignment = wrap_align
-                    ws2.cell(row=row, column=9, value=problem.ai_feedback or "").alignment = wrap_align
-                ws2.cell(row=row, column=8, value=ps.reason).alignment = wrap_align
-                for c in range(1, 10):
+
+                # 수정점수: 비워두고 입력 유도 색상만 적용
+                ws2.cell(row=row, column=8).fill = input_fill
+                ws2.cell(row=row, column=8).alignment = center_align
+
+                # 교수코멘트: 문제 단위 필드. 첫 행에만 쓰면 교수가 행을 정렬했을 때
+                # 코멘트가 엉뚱한 문제로 딸려가므로, 그 문제의 모든 행에 같은 값을 쓴다.
+                # (업로드 시에는 행키로 문제를 식별하므로 어느 행에서 읽어도 같은 문제다.)
+                comment_cell = ws2.cell(
+                    row=row, column=9, value=problem.professor_feedback or ""
+                )
+                comment_cell.fill = input_fill
+                comment_cell.alignment = wrap_align
+
+                if spec_idx == 0:
+                    ws2.cell(row=row, column=10, value=student_answer).alignment = wrap_align
+                    ws2.cell(row=row, column=12, value=problem.ai_feedback or "").alignment = wrap_align
+                ws2.cell(row=row, column=11, value=reason).alignment = wrap_align
+
+                for c in range(1, len(detail_headers) + 1):
                     ws2.cell(row=row, column=c).border = thin_border
                 row += 1
 
     # 컬럼별 너비: 학번/이름/문제/점수는 좁게, 채점항목/학생답변/피드백은 넓게 고정
-    col_widths = {1: 15, 2: 12, 3: 8, 4: 10, 5: 10, 6: 40, 7: 50, 8: 50, 9: 50}
-    for col in range(1, 10):
+    col_widths = {1: 3, 2: 15, 3: 12, 4: 8, 5: 40, 6: 10,
+                  7: 10, 8: 12, 9: 40, 10: 50, 11: 50, 12: 50}
+    for col in range(1, len(detail_headers) + 1):
         ws2.column_dimensions[get_column_letter(col)].width = col_widths.get(col, 20)
-    ws2.freeze_panes = "C2"
+    # 행키는 내부 식별용이라 숨긴다 (지우면 그 행은 반영되지 않음)
+    ws2.column_dimensions["A"].hidden = True
+    ws2.freeze_panes = "E2"
 
     # ── Sheet 3: 수정후채점결과 (교수 수정점수 + 코멘트) ─────────────────
     ws3 = wb.create_sheet("수정후채점결과")
@@ -2158,6 +2301,366 @@ async def download_excel(
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
     )
 
+
+# ── 엑셀 업로드 → 점수 반영 ──────────────────────────────────────────────
+
+def _cell_is_blank(value) -> bool:
+    """빈칸 판정. 0은 '명시적 0점'이므로 절대 빈칸이 아니다 (truthiness 사용 금지)."""
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def _parse_revision_excel(content: bytes, session_id: str, results: list):
+    """업로드된 엑셀에서 변경사항을 읽어낸다.
+
+    반환: (changes, errors, warnings, is_stale)
+      changes: ExcelRevisionChange 목록 (반영 대상)
+      errors:  ExcelRevisionError 목록 (해당 행만 제외, 나머지는 반영 가능)
+      is_stale: 다운로드 이후 DB가 바뀌어 엑셀이 낡음
+
+    행 식별은 숨김 '행키' 컬럼으로만 한다 — 교수가 정렬·행삭제·컬럼이동을 해도 안전하다.
+    """
+    import openpyxl
+
+    try:
+        # data_only=True: 교수가 수식을 넣었으면 계산된 캐시값을 읽는다
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="엑셀 파일(.xlsx)을 읽을 수 없습니다. 다운로드한 파일이 맞는지 확인해주세요"
+        )
+
+    if EXCEL_REVISION_SHEET not in wb.sheetnames:
+        raise HTTPException(
+            status_code=400,
+            detail=f"「{EXCEL_REVISION_SHEET}」 시트를 찾을 수 없습니다. 이 시스템에서 받은 엑셀 파일인지 확인해주세요"
+        )
+    ws = wb[EXCEL_REVISION_SHEET]
+
+    # 헤더 이름으로 컬럼을 찾는다 (위치 기반이 아니므로 컬럼 이동/삽입에 안전)
+    header_map = {}
+    for col in range(1, ws.max_column + 1):
+        name = ws.cell(row=1, column=col).value
+        if name is not None:
+            header_map[str(name).strip()] = col
+
+    missing = [h for h in (EXCEL_ROWKEY_HEADER, EXCEL_SCORE_HEADER, EXCEL_COMMENT_HEADER)
+               if h not in header_map]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"필요한 컬럼이 없습니다: {', '.join(missing)}. 헤더 행을 지우지 말고 다시 시도해주세요"
+        )
+
+    key_col = header_map[EXCEL_ROWKEY_HEADER]
+    score_col = header_map[EXCEL_SCORE_HEADER]
+    comment_col = header_map[EXCEL_COMMENT_HEADER]
+
+    expected_prefix = _build_row_key_prefix(session_id, json.dumps(results, ensure_ascii=False))
+    expected_session = expected_prefix.split("-")[0]
+
+    errors = []
+    warnings = []
+    is_stale = False
+    # 같은 행키가 두 번 나오면(행 복사) 마지막 값을 채택하기 위해 dict로 모은다
+    score_rows = {}
+    # 교수코멘트는 문제 단위 필드 — (student_index, problem_id)로 모은다
+    comment_rows = {}
+
+    for r in range(2, ws.max_row + 1):
+        raw_key = ws.cell(row=r, column=key_col).value
+        if _cell_is_blank(raw_key):
+            continue  # 교수가 추가한 메모 행 등은 조용히 무시
+
+        row_key = str(raw_key).strip()
+        parts = row_key.split("|")
+        if len(parts) != 4:
+            errors.append(ExcelRevisionError(
+                excel_row=r, row_key=row_key, message="행 식별자 형식이 올바르지 않습니다"
+            ))
+            continue
+
+        prefix, stu_raw, problem_id, ps_raw = parts
+        # 세션이 다르면 파일 전체를 거부 (다른 시험 엑셀을 잘못 올린 경우)
+        if prefix.split("-")[0] != expected_session:
+            raise HTTPException(
+                status_code=400,
+                detail="다른 채점 세션의 엑셀 파일입니다. 이 채점 결과에서 다운로드한 파일을 올려주세요"
+            )
+        # 세션은 같은데 해시가 다르면 다운로드 이후 웹에서 점수가 바뀐 것
+        if prefix != expected_prefix:
+            is_stale = True
+
+        try:
+            stu_idx = int(stu_raw)
+            ps_idx = int(ps_raw)
+        except ValueError:
+            errors.append(ExcelRevisionError(
+                excel_row=r, row_key=row_key, message="행 식별자 형식이 올바르지 않습니다"
+            ))
+            continue
+
+        if stu_idx < 0 or stu_idx >= len(results):
+            errors.append(ExcelRevisionError(
+                excel_row=r, row_key=row_key, message="해당 학생을 찾을 수 없습니다"
+            ))
+            continue
+
+        student = results[stu_idx]
+        problem = next(
+            (p for p in student.get("problems", []) if str(p.get("problem_id")) == problem_id),
+            None
+        )
+        if problem is None:
+            errors.append(ExcelRevisionError(
+                excel_row=r, row_key=row_key, message=f"Q{problem_id} 문제를 찾을 수 없습니다"
+            ))
+            continue
+
+        partials = problem.get("partial_scores") or []
+
+        # ── 수정점수 ──
+        score_val = ws.cell(row=r, column=score_col).value
+        if not _cell_is_blank(score_val):
+            try:
+                new_score = float(str(score_val).strip())
+            except (TypeError, ValueError):
+                errors.append(ExcelRevisionError(
+                    excel_row=r, row_key=row_key,
+                    message=f"점수는 숫자여야 합니다 (입력값: {score_val})"
+                ))
+                new_score = None
+
+            if new_score is not None:
+                if ps_idx >= 0:
+                    if ps_idx >= len(partials):
+                        errors.append(ExcelRevisionError(
+                            excel_row=r, row_key=row_key,
+                            message="채점 항목 구성이 바뀌었습니다. 엑셀을 다시 받아주세요"
+                        ))
+                        new_score = None
+                    else:
+                        max_score = float(partials[ps_idx].get("max_score", 0))
+                        item_name = partials[ps_idx].get("item")
+                        old_value = partials[ps_idx].get("score")
+                else:
+                    if partials:
+                        errors.append(ExcelRevisionError(
+                            excel_row=r, row_key=row_key,
+                            message="이 문제에 세부 항목이 생겼습니다. 엑셀을 다시 받아주세요"
+                        ))
+                        new_score = None
+                    else:
+                        max_score = float(problem.get("full_score", 0))
+                        item_name = None
+                        old_value = problem.get("obtained_score")
+
+            if new_score is not None:
+                if new_score < 0 or new_score > max_score:
+                    errors.append(ExcelRevisionError(
+                        excel_row=r, row_key=row_key,
+                        message=f"점수는 0 ~ {max_score}점 범위여야 합니다 (입력값: {new_score})"
+                    ))
+                elif float(old_value or 0) != new_score:
+                    if row_key in score_rows:
+                        warnings.append(f"{r}행: 같은 항목이 여러 번 나와 마지막 값을 사용합니다")
+                    score_rows[row_key] = ExcelRevisionChange(
+                        row_key=row_key, excel_row=r, student_index=stu_idx,
+                        student_filename=student.get("filename", ""),
+                        student_id=student.get("student_id"),
+                        student_name=student.get("student_name"),
+                        problem_id=problem_id, partial_score_index=ps_idx,
+                        item_name=item_name, field="score",
+                        old_value=str(old_value), new_value=str(new_score),
+                        max_score=max_score,
+                    )
+
+        # ── 교수코멘트 (문제 단위) ──
+        # 한 문제의 모든 행에 같은 값이 들어있다. 어느 행에서 읽든 행키로 문제를 식별하므로
+        # 정렬·행삭제에 안전하다. 값이 서로 다르면 교수가 일부 행만 고친 것이므로 오류.
+        comment_val = ws.cell(row=r, column=comment_col).value
+        if not _cell_is_blank(comment_val):
+            text = str(comment_val).strip()
+            new_comment = "" if text == EXCEL_COMMENT_DELETE else text
+            old_comment = problem.get("professor_feedback")
+            group = (stu_idx, problem_id)
+
+            if old_comment != new_comment:
+                prev = comment_rows.get(group)
+                if prev is not None and prev.new_value != new_comment:
+                    errors.append(ExcelRevisionError(
+                        excel_row=r, row_key=row_key,
+                        message=f"Q{problem_id}에 서로 다른 교수코멘트가 입력되었습니다"
+                    ))
+                    continue
+                comment_rows[group] = ExcelRevisionChange(
+                    row_key=row_key, excel_row=r, student_index=stu_idx,
+                    student_filename=student.get("filename", ""),
+                    student_id=student.get("student_id"),
+                    student_name=student.get("student_name"),
+                    problem_id=problem_id, partial_score_index=-1,
+                    item_name=None, field="professor_feedback",
+                    old_value=old_comment, new_value=new_comment,
+                )
+
+    changes = list(score_rows.values()) + list(comment_rows.values())
+    changes.sort(key=lambda c: c.excel_row)
+    return changes, errors, warnings, is_stale
+
+
+def _purge_expired_previews():
+    """만료된 미리보기 정리."""
+    now = datetime.utcnow()
+    for pid in [k for k, v in excel_previews.items() if v["expires_at"] < now]:
+        excel_previews.pop(pid, None)
+
+
+def _load_session_for_revision(session_id: str, current_user, db):
+    """엑셀 반영용 세션 조회 + 권한 검사 (/revise와 동일한 3단 검사)."""
+    if current_user.get("role") not in ("professor", "admin"):
+        raise HTTPException(status_code=403, detail="교수 권한이 필요합니다")
+
+    db_record = db.query(models.GradingSessionDB).filter(
+        models.GradingSessionDB.id == session_id
+    ).first()
+    if not db_record or not db_record.results_json:
+        raise HTTPException(status_code=404, detail="채점 세션을 찾을 수 없습니다")
+
+    if db_record.user_id and db_record.user_id != current_user["id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="해당 채점 세션의 수정 권한이 없습니다")
+
+    return db_record
+
+
+@app.post("/grading/session/{session_id}/upload-preview", response_model=ExcelPreviewResponse)
+async def preview_excel_revision(
+    session_id: str,
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """수정한 엑셀을 올려 무엇이 바뀌는지 미리 확인한다. 아직 DB에 반영하지 않는다."""
+    db_record = _load_session_for_revision(session_id, current_user, db)
+
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="파일이 너무 큽니다 (최대 20MB)")
+
+    results = json.loads(db_record.results_json)
+    changes, errors, warnings, is_stale = _parse_revision_excel(content, session_id, results)
+
+    _purge_expired_previews()
+    preview_id = uuid.uuid4().hex
+    expires_at = datetime.utcnow() + timedelta(minutes=10)
+    excel_previews[preview_id] = {
+        "session_id": session_id,
+        "user_id": current_user["id"],
+        "changes": changes,
+        # 반영 직전에 DB가 또 바뀌지 않았는지 확인하기 위한 스냅샷
+        "snapshot": _build_row_key_prefix(session_id, db_record.results_json),
+        "expires_at": expires_at,
+    }
+
+    return ExcelPreviewResponse(
+        preview_id=preview_id,
+        session_id=session_id,
+        is_stale=is_stale,
+        changes=changes,
+        errors=errors,
+        warnings=warnings,
+        affected_students=len({c.student_index for c in changes}),
+        affected_problems=len({(c.student_index, c.problem_id) for c in changes}),
+        expires_at=expires_at.isoformat(),
+    )
+
+
+@app.post("/grading/session/{session_id}/upload-apply", response_model=ExcelApplyResponse)
+async def apply_excel_revision(
+    session_id: str,
+    payload: ExcelApplyRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """미리보기에서 확인한 변경사항을 실제로 반영한다."""
+    db_record = _load_session_for_revision(session_id, current_user, db)
+
+    _purge_expired_previews()
+    preview = excel_previews.get(payload.preview_id)
+    if not preview:
+        raise HTTPException(status_code=400, detail="미리보기가 만료되었습니다. 파일을 다시 올려주세요")
+    if preview["session_id"] != session_id or preview["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="이 미리보기를 반영할 권한이 없습니다")
+
+    # 미리보기를 본 이후 DB가 바뀌었으면 거부 — 화면에서 본 것과 결과가 달라진다
+    if preview["snapshot"] != _build_row_key_prefix(session_id, db_record.results_json):
+        excel_previews.pop(payload.preview_id, None)
+        raise HTTPException(
+            status_code=409,
+            detail="미리보기 이후 점수가 변경되었습니다. 엑셀을 다시 받아 수정해주세요"
+        )
+
+    changes = preview["changes"]
+    if not changes:
+        excel_previews.pop(payload.preview_id, None)
+        return ExcelApplyResponse(success=True, revisions_count=0, affected_students=0)
+
+    results = json.loads(db_record.results_json)
+
+    # (학생, 문제) 단위로 묶어 문제마다 한 번만 호출한다 (파싱·저장·커밋 각 1회)
+    grouped = {}
+    for c in changes:
+        grouped.setdefault((c.student_index, c.problem_id), []).append(c)
+
+    all_logs = []
+    try:
+        for (stu_idx, problem_id), items in grouped.items():
+            partial_updates = [
+                {"index": c.partial_score_index, "score": float(c.new_value)}
+                for c in items
+                if c.field == "score" and c.partial_score_index >= 0
+            ]
+            direct_score = next(
+                (float(c.new_value) for c in items
+                 if c.field == "score" and c.partial_score_index < 0),
+                None
+            )
+            comment = next(
+                (c.new_value for c in items if c.field == "professor_feedback"),
+                None
+            )
+
+            logs, _, _ = _apply_problem_revision(
+                session_id=session_id,
+                results=results,
+                student_filename=items[0].student_filename,
+                problem_id=problem_id,
+                revised_by=current_user["id"],
+                obtained_score=direct_score,
+                professor_feedback=comment,
+                partial_scores=partial_updates or None,
+                student_ref=results[stu_idx],
+            )
+            all_logs.extend(logs)
+
+        if all_logs:
+            db_record.results_json = json.dumps(results, ensure_ascii=False)
+            db.add_all(all_logs)
+            db.commit()
+    except RevisionError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="점수 반영 중 오류가 발생했습니다")
+
+    # 1회용 — 같은 미리보기를 두 번 반영하지 못하게 한다
+    excel_previews.pop(payload.preview_id, None)
+
+    return ExcelApplyResponse(
+        success=True,
+        revisions_count=len(all_logs),
+        affected_students=len({c.student_index for c in changes}),
+    )
 
 
 @app.post("/rubric/parse-notebook")

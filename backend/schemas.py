@@ -216,3 +216,51 @@ class RevisionLogItem(BaseModel):
     new_value: Optional[str] = None
     revised_by_username: Optional[str] = None
     revised_at: str
+
+
+# ── 엑셀 왕복 수정 (다운로드 → 수정 → 업로드 → 반영) ────────────────────────
+
+class ExcelRevisionChange(BaseModel):
+    """엑셀에서 감지된 변경 1건 (미리보기 표시 단위)"""
+    row_key: str
+    excel_row: int
+    student_index: int
+    student_filename: str
+    student_id: Optional[str] = None
+    student_name: Optional[str] = None
+    problem_id: str
+    partial_score_index: int          # -1 = 세부 항목이 없는 문제의 전체 점수
+    item_name: Optional[str] = None
+    field: str                        # "score" | "professor_feedback"
+    old_value: Optional[str] = None   # DB의 현재값
+    new_value: Optional[str] = None
+    max_score: Optional[float] = None
+
+
+class ExcelRevisionError(BaseModel):
+    """반영할 수 없는 행. 해당 행만 제외하고 나머지는 반영한다."""
+    excel_row: int
+    row_key: Optional[str] = None
+    message: str
+
+
+class ExcelPreviewResponse(BaseModel):
+    preview_id: str
+    session_id: str
+    is_stale: bool = False            # 다운로드 이후 웹에서 점수가 바뀜
+    changes: List[ExcelRevisionChange] = []
+    errors: List[ExcelRevisionError] = []
+    warnings: List[str] = []
+    affected_students: int = 0
+    affected_problems: int = 0
+    expires_at: str
+
+
+class ExcelApplyRequest(BaseModel):
+    preview_id: str
+
+
+class ExcelApplyResponse(BaseModel):
+    success: bool
+    revisions_count: int
+    affected_students: int

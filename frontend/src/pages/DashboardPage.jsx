@@ -6,6 +6,7 @@ import { sendBrowserNotification } from '../services/notify';
 import ResultTable from '../components/ResultTable';
 import StudentDetailModal from '../components/StudentDetailModal';
 import StatsDashboard from '../components/StatsDashboard';
+import ExcelUploadModal from '../components/ExcelUploadModal';
 
 export default function DashboardPage() {
   const { sessionId } = useParams();
@@ -13,6 +14,7 @@ export default function DashboardPage() {
   const [session, setSession] = useState(null);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [showStats, setShowStats] = useState(false);
+  const [showExcelUpload, setShowExcelUpload] = useState(false);
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -375,13 +377,18 @@ export default function DashboardPage() {
                   : '채점 진행 중...'}
             </h2>
             {(isDone || (isCancelled && session.results.length > 0)) && (
-              <button
-                style={downloadLoading ? {...s.dlBtn, opacity:0.7} : s.dlBtn}
-                onClick={handleDownload}
-                disabled={downloadLoading}
-              >
-                {downloadLoading ? '다운로드 중...' : '📥 Excel 다운로드'}
-              </button>
+              <div style={s.tableActions}>
+                <button
+                  style={downloadLoading ? {...s.dlBtn, opacity:0.7, cursor:'wait'} : s.dlBtn}
+                  onClick={handleDownload}
+                  disabled={downloadLoading}
+                >
+                  {downloadLoading ? '다운로드 중...' : '📥 Excel 다운로드'}
+                </button>
+                <button style={s.upBtn} onClick={() => setShowExcelUpload(true)}>
+                  📤 Excel 업로드
+                </button>
+              </div>
             )}
           </div>
 
@@ -415,6 +422,19 @@ export default function DashboardPage() {
         <StatsDashboard
           results={session.results}
           onClose={() => setShowStats(false)}
+        />
+      )}
+
+      {showExcelUpload && (
+        <ExcelUploadModal
+          sessionId={sessionId}
+          onClose={() => setShowExcelUpload(false)}
+          onApplied={() => {
+            setShowExcelUpload(false);
+            // 반영 규모가 클 수 있어 개별 병합보다 전체 재조회가 안전하다
+            invalidate(CACHE_KEYS.history, CACHE_KEYS.dashboard, CACHE_KEYS.revisions);
+            fetchSession();
+          }}
         />
       )}
 
@@ -590,8 +610,22 @@ const s = {
   },
   error: { background:'#fef2f2', border:'1px solid #fecaca', color:'#dc2626', borderRadius:8, padding:'12px 16px', marginBottom:16 },
   tableCard: { background:'#fff', borderRadius:16, padding:'16px 20px', boxShadow:'0 1px 8px rgba(0,0,0,0.07)' },
-  tableHeader: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 },
-  tableTitle: { fontSize:17, fontWeight:700, color:'#1e293b' },
-  dlBtn: { background:'#2563eb', color:'#fff', border:'none', borderRadius:8, padding:'8px 18px', fontSize:14, fontWeight:600, cursor:'pointer' },
+  // 좁은 화면에서 제목과 버튼이 겹치지 않도록 줄바꿈을 허용한다
+  tableHeader: {
+    display:'flex', justifyContent:'space-between', alignItems:'center',
+    gap:12, flexWrap:'wrap', marginBottom:12,
+  },
+  tableTitle: { fontSize:17, fontWeight:700, color:'#1e293b', lineHeight:1.3, margin:0 },
+  tableActions: { display:'flex', alignItems:'center', gap:8, flexShrink:0 },
+  // 두 버튼은 같은 크기·높이로 맞추고 위계는 색으로만 구분한다
+  dlBtn: {
+    background:'#2563eb', color:'#fff', border:'1px solid #2563eb', borderRadius:8,
+    padding:'9px 18px', fontSize:14, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap',
+  },
+  // 다운로드가 선행 동작이므로 업로드는 보조 스타일
+  upBtn: {
+    background:'#fff', color:'#1d4ed8', border:'1px solid #93c5fd', borderRadius:8,
+    padding:'9px 18px', fontSize:14, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap',
+  },
   empty: { textAlign:'center', color:'#94a3b8', padding:'40px 0', fontSize:15 }
 };

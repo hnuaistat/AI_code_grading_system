@@ -65,6 +65,15 @@ export const gradingAPI = {
   cancelSession: (sessionId) => API.post(`/grading/session/${sessionId}/cancel`),
   getResults: (sessionId) => API.get(`/grading/session/${sessionId}/results`),
   downloadExcel: (sessionId) => API.get(`/grading/session/${sessionId}/download`, { responseType: 'blob' }),
+  uploadExcelPreview: (sessionId, file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return API.post(`/grading/session/${sessionId}/upload-preview`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+  },
+  applyExcelRevision: (sessionId, previewId) =>
+    API.post(`/grading/session/${sessionId}/upload-apply`, { preview_id: previewId }),
   getHistory: () => API.get('/grading/history'),
   updateSessionItem: (sessionId, subjectItemName) =>
     API.patch(`/grading/session/${sessionId}/subject-item`, { subject_item_name: subjectItemName }),
